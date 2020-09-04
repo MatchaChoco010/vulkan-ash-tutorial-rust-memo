@@ -1,8 +1,8 @@
 use ash::{
     extensions::ext::DebugUtils,
-    version::{EntryV1_0, InstanceV1_0},
+    version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
     vk::{self, version_major, version_minor, version_patch},
-    Entry, Instance,
+    Device, Entry, Instance,
 };
 use std::{
     ffi::{CStr, CString},
@@ -72,6 +72,8 @@ struct VulkanApp {
     debug_utils_loader: DebugUtils,
     debug_messenger: vk::DebugUtilsMessengerEXT,
     _physical_device: vk::PhysicalDevice,
+    device: Device,
+    _graphics_queue: vk::Queue,
 }
 
 impl VulkanApp {
@@ -80,6 +82,8 @@ impl VulkanApp {
         let instance = Self::create_instance(&entry);
         let (debug_utils_loader, debug_messenger) = Self::setup_debug_utils(&entry, &instance);
         let physical_device = Self::pick_physical_device(&instance);
+        let (logical_device, graphics_queue) =
+            Self::create_logical_device(&instance, physical_device);
 
         Self {
             _entry: entry,
@@ -87,6 +91,8 @@ impl VulkanApp {
             debug_utils_loader,
             debug_messenger,
             _physical_device: physical_device,
+            device: logical_device,
+            _graphics_queue: graphics_queue,
         }
     }
 
@@ -220,6 +226,7 @@ impl VulkanApp {
         }
     }
 
+    // PhysicalDeviceを選択する
     fn pick_physical_device(instance: &Instance) -> vk::PhysicalDevice {
         let physical_devices = unsafe {
             instance
@@ -247,6 +254,8 @@ impl VulkanApp {
         }
     }
 
+    // 物理デバイスが適切化確認する
+    // ここでは必要なQueueFamily（GraphicsQueue）があるかを確認
     fn is_physical_device_suitable(
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
@@ -333,6 +342,7 @@ impl VulkanApp {
         return indices.is_complete();
     }
 
+    // 物理デバイスのキューファミリーでGraphicsに使えるインデックスを確認して返している
     fn find_queue_family(
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
@@ -357,6 +367,52 @@ impl VulkanApp {
         }
 
         queue_family_indices
+    }
+
+    // 論理デバイスを作成しその論理デバイスと付随するキューを返す
+    fn create_logical_device(
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> (Device, vk::Queue) {
+        let indices = Self::find_queue_family(instance, physical_device);
+
+        let queue_priorities = [1.0_f32];
+        let queue_create_info = vk::DeviceQueueCreateInfo {
+            s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::DeviceQueueCreateFlags::empty(),
+            queue_family_index: indices.graphics_family.unwrap(),
+            p_queue_priorities: queue_priorities.as_ptr(),
+            queue_count: queue_priorities.len() as u32,
+        };
+
+        let physical_device_features = vk::PhysicalDeviceFeatures {
+            ..Default::default()
+        };
+
+        let device_create_info = vk::DeviceCreateInfo {
+            s_type: vk::StructureType::DEVICE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::DeviceCreateFlags::empty(),
+            queue_create_info_count: 1,
+            p_queue_create_infos: &queue_create_info,
+            enabled_layer_count: 0,
+            pp_enabled_layer_names: ptr::null(),
+            enabled_extension_count: 0,
+            pp_enabled_extension_names: ptr::null(),
+            p_enabled_features: &physical_device_features,
+        };
+
+        let device: Device = unsafe {
+            instance
+                .create_device(physical_device, &device_create_info, None)
+                .expect("Failed to create logical Device!")
+        };
+
+        let graphics_queue =
+            unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
+
+        (device, graphics_queue)
     }
 
     fn draw_frame(&mut self) {
@@ -384,6 +440,7 @@ fn populate_debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEX
 impl Drop for VulkanApp {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_device(None);
             if ENABLE_VALIDATION_LAYERS {
                 self.debug_utils_loader
                     .destroy_debug_utils_messenger(self.debug_messenger, None);
