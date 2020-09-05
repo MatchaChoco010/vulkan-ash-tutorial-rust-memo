@@ -113,6 +113,7 @@ struct VulkanApp {
     _swapchain_images: Vec<vk::Image>,
     _swapchain_format: vk::Format,
     _swapchain_extent: vk::Extent2D,
+    swapchain_imageviews: Vec<vk::ImageView>,
 }
 
 impl VulkanApp {
@@ -135,6 +136,11 @@ impl VulkanApp {
             &surface_stuff,
             &family_indices,
         );
+        let swapchain_imageviews = Self::create_image_views(
+            &logical_device,
+            swapchain_stuff.swapchain_format,
+            &swapchain_stuff.swapchain_images,
+        );
 
         Self {
             _entry: entry,
@@ -152,6 +158,7 @@ impl VulkanApp {
             _swapchain_format: swapchain_stuff.swapchain_format,
             _swapchain_images: swapchain_stuff.swapchain_images,
             _swapchain_extent: swapchain_stuff.swapchain_extent,
+            swapchain_imageviews,
         }
     }
 
@@ -303,11 +310,6 @@ impl VulkanApp {
                 .expect("Failed to enumerate Physical Devices!")
         };
 
-        println!(
-            "{} devices (GPU) found with vulkan support.",
-            physical_devices.len()
-        );
-
         let result = physical_devices.iter().find(|physical_device| {
             Self::is_physical_device_suitable(instance, **physical_device, surface_stuff)
         });
@@ -318,7 +320,7 @@ impl VulkanApp {
         }
     }
 
-    // 物理デバイスが適切化確認する
+    // 物理デバイスが適切か確認する
     // ここでは必要なQueueFamily（GraphicsQueue, PresentできるQueue）があるかを確認
     // デバイス拡張の確認とswapchainが表示用のフォーマット、プレセントモードを一つ以上あることを確認
     fn is_physical_device_suitable(
@@ -423,13 +425,8 @@ impl VulkanApp {
 
         let mut available_extension_names = vec![];
 
-        println!("\tAvailable Device Extensions: ");
         for extension in available_extensions.iter() {
             let extension_name = tools::vk_to_string(&extension.extension_name);
-            println!(
-                "\t\tName: {}, Version: {}",
-                extension_name, extension.spec_version
-            );
             available_extension_names.push(extension_name);
         }
 
@@ -499,6 +496,7 @@ impl VulkanApp {
     }
 
     // Swapchainを作成し返す
+    // 付随するswapchain_imagesやextent、formatもまとめて返す
     fn create_swapchain(
         instance: &Instance,
         device: &Device,
@@ -620,6 +618,48 @@ impl VulkanApp {
         }
     }
 
+    // SwapchainからImageViewを作成する
+    fn create_image_views(
+        device: &Device,
+        surface_format: vk::Format,
+        images: &Vec<vk::Image>,
+    ) -> Vec<vk::ImageView> {
+        let mut swapchain_imageviews = vec![];
+
+        for &image in images.iter() {
+            let imageview_create_info = vk::ImageViewCreateInfo {
+                s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::ImageViewCreateFlags::empty(),
+                view_type: vk::ImageViewType::TYPE_2D,
+                format: surface_format,
+                components: vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
+                },
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                image,
+            };
+
+            let imageview = unsafe {
+                device
+                    .create_image_view(&imageview_create_info, None)
+                    .expect("Failed to create Image View!")
+            };
+            swapchain_imageviews.push(imageview);
+        }
+
+        swapchain_imageviews
+    }
+
     fn draw_frame(&mut self) {
         // Drawing will be here
     }
@@ -645,6 +685,9 @@ fn populate_debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEX
 impl Drop for VulkanApp {
     fn drop(&mut self) {
         unsafe {
+            for &imageview in self.swapchain_imageviews.iter() {
+                self.device.destroy_image_view(imageview, None);
+            }
             self.swapchain_loader
                 .destroy_swapchain(self.swapchain, None);
             self.device.destroy_device(None);
