@@ -35,6 +35,7 @@ const VALIDATION: &[&str] = &[
     "VK_LAYER_LUNARG_standard_validation",
 ];
 const DEVICE_EXTENSIONS: &[&str] = &["VK_KHR_swapchain"];
+const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 unsafe extern "system" fn vulkan_debug_utils_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -98,7 +99,14 @@ struct SwapChainSupportDetail {
     present_modes: Vec<vk::PresentModeKHR>,
 }
 
+struct SyncObjects {
+    image_available_semaphores: Vec<vk::Semaphore>,
+    render_finished_semaphores: Vec<vk::Semaphore>,
+    inflight_fences: Vec<vk::Fence>,
+}
+
 struct VulkanApp {
+    window: Window,
     _entry: Entry,
     instance: Instance,
     surface_loader: Surface,
@@ -107,8 +115,8 @@ struct VulkanApp {
     debug_messenger: vk::DebugUtilsMessengerEXT,
     _physical_device: vk::PhysicalDevice,
     device: Device,
-    _graphics_queue: vk::Queue,
-    _present_queue: vk::Queue,
+    graphics_queue: vk::Queue,
+    present_queue: vk::Queue,
     swapchain_loader: Swapchain,
     swapchain: vk::SwapchainKHR,
     _swapchain_images: Vec<vk::Image>,
@@ -120,11 +128,17 @@ struct VulkanApp {
     pipeline_layout: vk::PipelineLayout,
     graphics_pipeline: vk::Pipeline,
     command_pool: vk::CommandPool,
-    _command_buffers: Vec<vk::CommandBuffer>,
+    command_buffers: Vec<vk::CommandBuffer>,
+    image_available_semaphores: Vec<vk::Semaphore>,
+    render_finished_semaphores: Vec<vk::Semaphore>,
+    in_flight_fences: Vec<vk::Fence>,
+    current_frame: usize,
 }
 
 impl VulkanApp {
-    pub fn new(window: &Window) -> Self {
+    pub fn new(event_loop: &EventLoop<()>) -> Self {
+        let window = Self::init_window(event_loop);
+
         let entry = Entry::new().unwrap();
         let instance = Self::create_instance(&entry);
         let (debug_utils_loader, debug_messenger) = Self::setup_debug_utils(&entry, &instance);
@@ -170,8 +184,10 @@ impl VulkanApp {
             render_pass,
             swapchain_stuff.swapchain_extent,
         );
+        let sync_objects = Self::create_sync_objects(&logical_device);
 
         Self {
+            window,
             _entry: entry,
             instance,
             surface: surface_stuff.surface,
@@ -180,8 +196,8 @@ impl VulkanApp {
             debug_messenger,
             _physical_device: physical_device,
             device: logical_device,
-            _graphics_queue: graphics_queue,
-            _present_queue: present_queue,
+            graphics_queue,
+            present_queue,
             swapchain_loader: swapchain_stuff.swapchain_loader,
             swapchain: swapchain_stuff.swapchain,
             _swapchain_format: swapchain_stuff.swapchain_format,
@@ -193,7 +209,11 @@ impl VulkanApp {
             pipeline_layout,
             graphics_pipeline,
             command_pool,
-            _command_buffers: command_buffers,
+            command_buffers,
+            image_available_semaphores: sync_objects.image_available_semaphores,
+            render_finished_semaphores: sync_objects.render_finished_semaphores,
+            in_flight_fences: sync_objects.inflight_fences,
+            current_frame: 0,
         }
     }
 
@@ -202,6 +222,7 @@ impl VulkanApp {
         WindowBuilder::new()
             .with_title(WINDOW_TITLE)
             .with_inner_size(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT))
+            .with_resizable(false)
             .build(event_loop)
             .expect("Failed to create window.")
     }
@@ -729,6 +750,16 @@ impl VulkanApp {
 
         let render_pass_atachments = [color_attachment];
 
+        let subpass_dependencies = [vk::SubpassDependency {
+            src_subpass: vk::SUBPASS_EXTERNAL,
+            dst_subpass: 0,
+            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            src_access_mask: vk::AccessFlags::empty(),
+            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            dependency_flags: vk::DependencyFlags::empty(),
+        }];
+
         let renderpass_create_info = vk::RenderPassCreateInfo {
             s_type: vk::StructureType::RENDER_PASS_CREATE_INFO,
             flags: vk::RenderPassCreateFlags::empty(),
@@ -737,8 +768,8 @@ impl VulkanApp {
             p_attachments: render_pass_atachments.as_ptr(),
             subpass_count: 1,
             p_subpasses: &subpass,
-            dependency_count: 0,
-            p_dependencies: ptr::null(),
+            dependency_count: subpass_dependencies.len() as u32,
+            p_dependencies: subpass_dependencies.as_ptr(),
         };
 
         unsafe {
@@ -1114,8 +1145,119 @@ impl VulkanApp {
         command_buffers
     }
 
+    // 画面表示の同期に必要なフェンスとセマフォを作成する
+    fn create_sync_objects(device: &Device) -> SyncObjects {
+        let mut sync_objects = SyncObjects {
+            image_available_semaphores: vec![],
+            render_finished_semaphores: vec![],
+            inflight_fences: vec![],
+        };
+
+        let semaphore_create_info = vk::SemaphoreCreateInfo {
+            s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::SemaphoreCreateFlags::empty(),
+        };
+
+        let fence_create_info = vk::FenceCreateInfo {
+            s_type: vk::StructureType::FENCE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::FenceCreateFlags::SIGNALED,
+        };
+
+        for _ in 0..MAX_FRAMES_IN_FLIGHT {
+            unsafe {
+                let image_available_semaphore = device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .expect("Failed to create Semaphore Object!");
+                let render_finished_semaphore = device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .expect("Failed to create Semaphore Object!");
+                let inflight_fence = device
+                    .create_fence(&fence_create_info, None)
+                    .expect("Failed to create Fence Object!");
+
+                sync_objects
+                    .image_available_semaphores
+                    .push(image_available_semaphore);
+                sync_objects
+                    .render_finished_semaphores
+                    .push(render_finished_semaphore);
+                sync_objects.inflight_fences.push(inflight_fence);
+            }
+        }
+
+        sync_objects
+    }
+
     fn draw_frame(&mut self) {
-        // Drawing will be here
+        let wait_fences = [self.in_flight_fences[self.current_frame]];
+
+        let (image_index, _is_sub_optimal) = unsafe {
+            self.device
+                .wait_for_fences(&wait_fences, true, std::u64::MAX)
+                .expect("Failed to wait for Fence!");
+
+            self.swapchain_loader
+                .acquire_next_image(
+                    self.swapchain,
+                    std::u64::MAX,
+                    self.image_available_semaphores[self.current_frame],
+                    vk::Fence::null(),
+                )
+                .expect("Failed to acquire next image.")
+        };
+
+        let wait_semaphores = [self.image_available_semaphores[self.current_frame]];
+        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+        let signal_semaphores = [self.render_finished_semaphores[self.current_frame]];
+
+        let submit_infos = [vk::SubmitInfo {
+            s_type: vk::StructureType::SUBMIT_INFO,
+            p_next: ptr::null(),
+            wait_semaphore_count: wait_semaphores.len() as u32,
+            p_wait_semaphores: wait_semaphores.as_ptr(),
+            p_wait_dst_stage_mask: wait_stages.as_ptr(),
+            command_buffer_count: 1,
+            p_command_buffers: &self.command_buffers[image_index as usize],
+            signal_semaphore_count: signal_semaphores.len() as u32,
+            p_signal_semaphores: signal_semaphores.as_ptr(),
+        }];
+
+        unsafe {
+            self.device
+                .reset_fences(&wait_fences)
+                .expect("Failed to reset Fence!");
+
+            self.device
+                .queue_submit(
+                    self.graphics_queue,
+                    &submit_infos,
+                    self.in_flight_fences[self.current_frame],
+                )
+                .expect("Failed to execute queue submit.");
+        }
+
+        let swapchains = [self.swapchain];
+
+        let present_info = vk::PresentInfoKHR {
+            s_type: vk::StructureType::PRESENT_INFO_KHR,
+            p_next: ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: signal_semaphores.as_ptr(),
+            swapchain_count: 1,
+            p_swapchains: swapchains.as_ptr(),
+            p_image_indices: &image_index,
+            p_results: ptr::null_mut(),
+        };
+
+        unsafe {
+            self.swapchain_loader
+                .queue_present(self.present_queue, &present_info)
+                .expect("Failed to execute queue present.");
+        }
+
+        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 }
 
@@ -1139,6 +1281,13 @@ fn populate_debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEX
 impl Drop for VulkanApp {
     fn drop(&mut self) {
         unsafe {
+            for i in 0..MAX_FRAMES_IN_FLIGHT {
+                self.device
+                    .destroy_semaphore(self.image_available_semaphores[i], None);
+                self.device
+                    .destroy_semaphore(self.render_finished_semaphores[i], None);
+                self.device.destroy_fence(self.in_flight_fences[i], None);
+            }
             self.device.destroy_command_pool(self.command_pool, None);
             for &framebuffer in self.swapchain_framebuffers.iter() {
                 self.device.destroy_framebuffer(framebuffer, None);
@@ -1164,7 +1313,7 @@ impl Drop for VulkanApp {
 }
 
 impl VulkanApp {
-    pub fn main_loop(mut self, event_loop: EventLoop<()>, window: Window) {
+    pub fn main_loop(mut self, event_loop: EventLoop<()>) {
         event_loop.run(move |event, _, control_flow| match event {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -1188,11 +1337,16 @@ impl VulkanApp {
                 },
             },
             Event::MainEventsCleared => {
-                window.request_redraw();
+                self.window.request_redraw();
             }
             Event::RedrawRequested(_window_id) => {
                 self.draw_frame();
             }
+            Event::LoopDestroyed => unsafe {
+                self.device
+                    .device_wait_idle()
+                    .expect("Failed to wait device idle!");
+            },
             _ => (),
         })
     }
@@ -1200,8 +1354,7 @@ impl VulkanApp {
 
 fn main() {
     let event_loop = EventLoop::new();
-    let window = VulkanApp::init_window(&event_loop);
 
-    let vulkan_app = VulkanApp::new(&window);
-    vulkan_app.main_loop(event_loop, window);
+    let vulkan_app = VulkanApp::new(&event_loop);
+    vulkan_app.main_loop(event_loop);
 }
