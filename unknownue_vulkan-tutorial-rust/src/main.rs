@@ -232,8 +232,13 @@ impl VulkanApp {
             &swapchain_stuff.swapchain_extent,
         );
         let command_pool = Self::create_command_pool(&logical_device, &family_indices);
-        let (vertex_buffer, vertex_buffer_memory) =
-            Self::create_vertex_buffer(&instance, &logical_device, physical_device);
+        let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
+            &instance,
+            &logical_device,
+            physical_device,
+            command_pool,
+            graphics_queue,
+        );
         let command_buffers = Self::create_command_buffers(
             &logical_device,
             command_pool,
@@ -1139,33 +1144,91 @@ impl VulkanApp {
         instance: &Instance,
         device: &Device,
         physical_device: vk::PhysicalDevice,
+        command_pool: vk::CommandPool,
+        submit_queue: vk::Queue,
     ) -> (vk::Buffer, vk::DeviceMemory) {
-        let vertex_buffer_create_info = vk::BufferCreateInfo {
+        let buffer_size = std::mem::size_of_val(&VERTICES_DATA) as vk::DeviceSize;
+        let device_memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
+        let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
+            device,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            &device_memory_properties,
+        );
+
+        unsafe {
+            let data_ptr = device
+                .map_memory(
+                    staging_buffer_memory,
+                    0,
+                    buffer_size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .expect("Failed to Map Memory") as *mut Vertex;
+
+            data_ptr.copy_from_nonoverlapping(VERTICES_DATA.as_ptr(), VERTICES_DATA.len());
+
+            device.unmap_memory(staging_buffer_memory);
+        }
+
+        let (vertex_buffer, vertex_buffer_memory) = Self::create_buffer(
+            device,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            &device_memory_properties,
+        );
+
+        Self::copy_buffer(
+            device,
+            submit_queue,
+            command_pool,
+            staging_buffer,
+            vertex_buffer,
+            buffer_size,
+        );
+
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_buffer_memory, None);
+        }
+
+        (vertex_buffer, vertex_buffer_memory)
+    }
+
+    // バッファを作成する
+    fn create_buffer(
+        device: &Device,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        required_memory_flags: vk::MemoryPropertyFlags,
+        device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
+    ) -> (vk::Buffer, vk::DeviceMemory) {
+        let buffer_create_info = vk::BufferCreateInfo {
             s_type: vk::StructureType::BUFFER_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::BufferCreateFlags::empty(),
-            size: std::mem::size_of_val(&VERTICES_DATA) as u64,
-            usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+            size,
+            usage,
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             queue_family_index_count: 0,
             p_queue_family_indices: ptr::null(),
         };
 
-        let vertex_buffer = unsafe {
+        let buffer = unsafe {
             device
-                .create_buffer(&vertex_buffer_create_info, None)
+                .create_buffer(&buffer_create_info, None)
                 .expect("Failed to create Vertex Buffer!")
         };
 
-        let mem_requirements = unsafe { device.get_buffer_memory_requirements(vertex_buffer) };
-        let mem_properties =
-            unsafe { instance.get_physical_device_memory_properties(physical_device) };
-        let required_memory_flags: vk::MemoryPropertyFlags =
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
         let memory_type = Self::find_memory_type(
             mem_requirements.memory_type_bits,
             required_memory_flags,
-            mem_properties,
+            device_memory_properties,
         );
 
         let allocate_info = vk::MemoryAllocateInfo {
@@ -1175,7 +1238,7 @@ impl VulkanApp {
             memory_type_index: memory_type,
         };
 
-        let vertex_buffer_memory = unsafe {
+        let buffer_memory = unsafe {
             device
                 .allocate_memory(&allocate_info, None)
                 .expect("Failed to allocate vertex buffer memory!")
@@ -1183,31 +1246,18 @@ impl VulkanApp {
 
         unsafe {
             device
-                .bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)
+                .bind_buffer_memory(buffer, buffer_memory, 0)
                 .expect("Failed to bind Buffer");
-
-            let data_ptr = device
-                .map_memory(
-                    vertex_buffer_memory,
-                    0,
-                    vertex_buffer_create_info.size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .expect("Failed to Map Memory") as *mut Vertex;
-
-            data_ptr.copy_from_nonoverlapping(VERTICES_DATA.as_ptr(), VERTICES_DATA.len());
-
-            device.unmap_memory(vertex_buffer_memory);
         }
 
-        (vertex_buffer, vertex_buffer_memory)
+        (buffer, buffer_memory)
     }
 
     // メモリタイプのインデックスを見つける
     fn find_memory_type(
         type_filter: u32,
         required_properties: vk::MemoryPropertyFlags,
-        mem_properties: vk::PhysicalDeviceMemoryProperties,
+        mem_properties: &vk::PhysicalDeviceMemoryProperties,
     ) -> u32 {
         for (i, memory_type) in mem_properties.memory_types.iter().enumerate() {
             if (type_filter & (1 << i)) > 0
@@ -1218,6 +1268,79 @@ impl VulkanApp {
         }
 
         panic!("Failed to find suitable memory type!")
+    }
+
+    // バッファのコピーのコマンドをサブミットしま待つ
+    fn copy_buffer(
+        device: &Device,
+        submit_queue: vk::Queue,
+        command_pool: vk::CommandPool,
+        src_buffer: vk::Buffer,
+        dst_buffer: vk::Buffer,
+        size: vk::DeviceSize,
+    ) {
+        let allocate_info = vk::CommandBufferAllocateInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            p_next: ptr::null(),
+            command_buffer_count: 1,
+            command_pool,
+            level: vk::CommandBufferLevel::PRIMARY,
+        };
+
+        let command_buffers = unsafe {
+            device
+                .allocate_command_buffers(&allocate_info)
+                .expect("Failed to allocate Command Buffer")
+        };
+        let command_buffer = command_buffers[0];
+
+        let begin_info = vk::CommandBufferBeginInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            p_next: ptr::null(),
+            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            p_inheritance_info: ptr::null(),
+        };
+
+        unsafe {
+            device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .expect("Failed to begine Command Buffer");
+
+            let copy_regions = [vk::BufferCopy {
+                src_offset: 0,
+                dst_offset: 0,
+                size,
+            }];
+
+            device.cmd_copy_buffer(command_buffer, src_buffer, dst_buffer, &copy_regions);
+
+            device
+                .end_command_buffer(command_buffer)
+                .expect("Failed to end Command Buffer");
+        }
+
+        let submit_info = [vk::SubmitInfo {
+            s_type: vk::StructureType::SUBMIT_INFO,
+            p_next: ptr::null(),
+            wait_semaphore_count: 0,
+            p_wait_semaphores: ptr::null(),
+            p_wait_dst_stage_mask: ptr::null(),
+            command_buffer_count: 1,
+            p_command_buffers: &command_buffer,
+            signal_semaphore_count: 0,
+            p_signal_semaphores: ptr::null(),
+        }];
+
+        unsafe {
+            device
+                .queue_submit(submit_queue, &submit_info, vk::Fence::null())
+                .expect("Failed to Submit Queue.");
+            device
+                .queue_wait_idle(submit_queue)
+                .expect("Failed to wait Queue idle");
+
+            device.free_command_buffers(command_pool, &command_buffers)
+        }
     }
 
     // 各フレームバッファに対するコマンドバッファを作成する
