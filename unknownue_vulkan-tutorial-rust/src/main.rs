@@ -6,6 +6,7 @@ use ash::{
     version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
     vk, Device, Entry, Instance,
 };
+use memoffset::offset_of;
 use std::{
     collections::HashSet,
     ffi::{CStr, CString},
@@ -105,6 +106,56 @@ struct SyncObjects {
     inflight_fences: Vec<vk::Fence>,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone)]
+struct Vertex {
+    pos: [f32; 2],
+    color: [f32; 3],
+}
+impl Vertex {
+    fn get_binding_descriptions() -> [vk::VertexInputBindingDescription; 1] {
+        [vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: std::mem::size_of::<Self>() as u32,
+            input_rate: vk::VertexInputRate::VERTEX,
+        }]
+    }
+
+    fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
+        [
+            // inPosition
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 0,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: offset_of!(Self, pos) as u32,
+            },
+            // inColor
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 1,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: offset_of!(Self, color) as u32,
+            },
+        ]
+    }
+}
+
+const VERTICES_DATA: [Vertex; 3] = [
+    Vertex {
+        pos: [0.0, -0.5],
+        color: [1.0, 1.0, 1.0],
+    },
+    Vertex {
+        pos: [0.5, 0.5],
+        color: [0.0, 1.0, 0.0],
+    },
+    Vertex {
+        pos: [-0.5, 0.5],
+        color: [0.0, 0.0, 1.0],
+    },
+];
+
 struct VulkanApp {
     window: Window,
     _entry: Entry,
@@ -128,6 +179,8 @@ struct VulkanApp {
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
     graphics_pipeline: vk::Pipeline,
+    vertex_buffer: vk::Buffer,
+    vertex_buffer_memory: vk::DeviceMemory,
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
     image_available_semaphores: Vec<vk::Semaphore>,
@@ -179,6 +232,8 @@ impl VulkanApp {
             &swapchain_stuff.swapchain_extent,
         );
         let command_pool = Self::create_command_pool(&logical_device, &family_indices);
+        let (vertex_buffer, vertex_buffer_memory) =
+            Self::create_vertex_buffer(&instance, &logical_device, physical_device);
         let command_buffers = Self::create_command_buffers(
             &logical_device,
             command_pool,
@@ -186,6 +241,7 @@ impl VulkanApp {
             &swapchain_framebuffers,
             render_pass,
             swapchain_stuff.swapchain_extent,
+            vertex_buffer,
         );
         let sync_objects = Self::create_sync_objects(&logical_device);
 
@@ -212,6 +268,8 @@ impl VulkanApp {
             render_pass,
             pipeline_layout,
             graphics_pipeline,
+            vertex_buffer,
+            vertex_buffer_memory,
             command_pool,
             command_buffers,
             image_available_semaphores: sync_objects.image_available_semaphores,
@@ -820,14 +878,17 @@ impl VulkanApp {
             },
         ];
 
+        let binding_description = Vertex::get_binding_descriptions();
+        let attribute_description = Vertex::get_attribute_descriptions();
+
         let vertex_input_state_create_info = vk::PipelineVertexInputStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineVertexInputStateCreateFlags::empty(),
-            vertex_attribute_description_count: 0,
-            p_vertex_attribute_descriptions: ptr::null(),
-            vertex_binding_description_count: 0,
-            p_vertex_binding_descriptions: ptr::null(),
+            vertex_attribute_description_count: attribute_description.len() as u32,
+            p_vertex_attribute_descriptions: attribute_description.as_ptr(),
+            vertex_binding_description_count: binding_description.len() as u32,
+            p_vertex_binding_descriptions: binding_description.as_ptr(),
         };
         let vertex_input_assembly_state_info = vk::PipelineInputAssemblyStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -1073,6 +1134,92 @@ impl VulkanApp {
         }
     }
 
+    // Vertex用のBufferを確保する
+    fn create_vertex_buffer(
+        instance: &Instance,
+        device: &Device,
+        physical_device: vk::PhysicalDevice,
+    ) -> (vk::Buffer, vk::DeviceMemory) {
+        let vertex_buffer_create_info = vk::BufferCreateInfo {
+            s_type: vk::StructureType::BUFFER_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::BufferCreateFlags::empty(),
+            size: std::mem::size_of_val(&VERTICES_DATA) as u64,
+            usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            queue_family_index_count: 0,
+            p_queue_family_indices: ptr::null(),
+        };
+
+        let vertex_buffer = unsafe {
+            device
+                .create_buffer(&vertex_buffer_create_info, None)
+                .expect("Failed to create Vertex Buffer!")
+        };
+
+        let mem_requirements = unsafe { device.get_buffer_memory_requirements(vertex_buffer) };
+        let mem_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        let required_memory_flags: vk::MemoryPropertyFlags =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let memory_type = Self::find_memory_type(
+            mem_requirements.memory_type_bits,
+            required_memory_flags,
+            mem_properties,
+        );
+
+        let allocate_info = vk::MemoryAllocateInfo {
+            s_type: vk::StructureType::MEMORY_ALLOCATE_INFO,
+            p_next: ptr::null(),
+            allocation_size: mem_requirements.size,
+            memory_type_index: memory_type,
+        };
+
+        let vertex_buffer_memory = unsafe {
+            device
+                .allocate_memory(&allocate_info, None)
+                .expect("Failed to allocate vertex buffer memory!")
+        };
+
+        unsafe {
+            device
+                .bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)
+                .expect("Failed to bind Buffer");
+
+            let data_ptr = device
+                .map_memory(
+                    vertex_buffer_memory,
+                    0,
+                    vertex_buffer_create_info.size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .expect("Failed to Map Memory") as *mut Vertex;
+
+            data_ptr.copy_from_nonoverlapping(VERTICES_DATA.as_ptr(), VERTICES_DATA.len());
+
+            device.unmap_memory(vertex_buffer_memory);
+        }
+
+        (vertex_buffer, vertex_buffer_memory)
+    }
+
+    // メモリタイプのインデックスを見つける
+    fn find_memory_type(
+        type_filter: u32,
+        required_properties: vk::MemoryPropertyFlags,
+        mem_properties: vk::PhysicalDeviceMemoryProperties,
+    ) -> u32 {
+        for (i, memory_type) in mem_properties.memory_types.iter().enumerate() {
+            if (type_filter & (1 << i)) > 0
+                && memory_type.property_flags.contains(required_properties)
+            {
+                return i as u32;
+            }
+        }
+
+        panic!("Failed to find suitable memory type!")
+    }
+
     // 各フレームバッファに対するコマンドバッファを作成する
     fn create_command_buffers(
         device: &Device,
@@ -1081,6 +1228,7 @@ impl VulkanApp {
         framebuffers: &Vec<vk::Framebuffer>,
         render_pass: vk::RenderPass,
         surface_extent: vk::Extent2D,
+        vertex_buffer: vk::Buffer,
     ) -> Vec<vk::CommandBuffer> {
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
@@ -1140,8 +1288,18 @@ impl VulkanApp {
                     vk::PipelineBindPoint::GRAPHICS,
                     graphics_pipeline,
                 );
+            }
+
+            let vertex_buffers = [vertex_buffer];
+            let offsets = [0_u64];
+
+            unsafe {
+                device.cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
+
                 device.cmd_draw(command_buffer, 3, 1, 0, 0);
+
                 device.cmd_end_render_pass(command_buffer);
+
                 device
                     .end_command_buffer(command_buffer)
                     .expect("Failed to record Command Buffer at Ending!");
@@ -1342,6 +1500,7 @@ impl VulkanApp {
             &self.swapchain_framebuffers,
             self.render_pass,
             self.swapchain_extent,
+            self.vertex_buffer,
         );
     }
 
@@ -1394,6 +1553,9 @@ impl Drop for VulkanApp {
             }
 
             self.cleanup_swapchain();
+
+            self.device.destroy_buffer(self.vertex_buffer, None);
+            self.device.free_memory(self.vertex_buffer_memory, None);
 
             self.device.destroy_command_pool(self.command_pool, None);
 
