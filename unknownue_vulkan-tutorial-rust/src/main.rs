@@ -7,6 +7,7 @@ use ash::{
     vk, Device, Entry, Instance,
 };
 use cgmath::{Deg, Matrix4, Point3, SquareMatrix, Vector3};
+use image::GenericImageView;
 use memoffset::offset_of;
 use std::{
     collections::HashSet,
@@ -39,6 +40,7 @@ const VALIDATION: &[&str] = &[
 ];
 const DEVICE_EXTENSIONS: &[&str] = &["VK_KHR_swapchain"];
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
+const TEXTURE_PATH: &'static str = "textures/texture.jpg";
 
 unsafe extern "system" fn vulkan_debug_utils_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -113,6 +115,7 @@ struct SyncObjects {
 struct Vertex {
     pos: [f32; 2],
     color: [f32; 3],
+    pub tex_coord: [f32; 2],
 }
 impl Vertex {
     fn get_binding_descriptions() -> [vk::VertexInputBindingDescription; 1] {
@@ -123,7 +126,7 @@ impl Vertex {
         }]
     }
 
-    fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
+    fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
         [
             // inPosition
             vk::VertexInputAttributeDescription {
@@ -139,6 +142,13 @@ impl Vertex {
                 format: vk::Format::R32G32B32_SFLOAT,
                 offset: offset_of!(Self, color) as u32,
             },
+            // inTexCoord
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 2,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: offset_of!(Self, tex_coord) as u32,
+            },
         ]
     }
 }
@@ -147,18 +157,22 @@ const VERTICES_DATA: [Vertex; 4] = [
     Vertex {
         pos: [-0.5, -0.5],
         color: [1.0, 0.0, 0.0],
+        tex_coord: [1.0, 0.0],
     },
     Vertex {
         pos: [0.5, -0.5],
         color: [0.0, 1.0, 0.0],
+        tex_coord: [0.0, 0.0],
     },
     Vertex {
         pos: [0.5, 0.5],
         color: [0.0, 0.0, 1.0],
+        tex_coord: [0.0, 1.0],
     },
     Vertex {
         pos: [-0.5, 0.5],
         color: [1.0, 1.0, 1.0],
+        tex_coord: [1.0, 1.0],
     },
 ];
 const INDICES_DATA: [u32; 6] = [2, 3, 0, 0, 1, 2];
@@ -196,6 +210,10 @@ struct VulkanApp {
     ubo_layout: vk::DescriptorSetLayout,
     pipeline_layout: vk::PipelineLayout,
     graphics_pipeline: vk::Pipeline,
+    texture_image: vk::Image,
+    texture_image_memory: vk::DeviceMemory,
+    texture_image_view: vk::ImageView,
+    texture_sampler: vk::Sampler,
     vertex_buffer: vk::Buffer,
     vertex_buffer_memory: vk::DeviceMemory,
     index_buffer: vk::Buffer,
@@ -260,6 +278,15 @@ impl VulkanApp {
             &swapchain_stuff.swapchain_extent,
         );
         let command_pool = Self::create_command_pool(&logical_device, &family_indices);
+        let (texture_image, texture_image_memory) = Self::create_textrue_image(
+            &logical_device,
+            command_pool,
+            graphics_queue,
+            &physical_device_memory_properties,
+            &Path::new(TEXTURE_PATH),
+        );
+        let texture_image_view = Self::create_texture_image_view(&logical_device, texture_image);
+        let texture_sampler = Self::create_texture_sampler(&logical_device);
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
             &logical_device,
             &physical_device_memory_properties,
@@ -286,6 +313,8 @@ impl VulkanApp {
             descriptor_pool,
             ubo_layout,
             &uniform_buffers,
+            texture_image_view,
+            texture_sampler,
             swapchain_stuff.swapchain_images.len(),
         );
         let command_buffers = Self::create_command_buffers(
@@ -327,6 +356,10 @@ impl VulkanApp {
             ubo_layout,
             pipeline_layout,
             graphics_pipeline,
+            texture_image,
+            texture_image_memory,
+            texture_image_view,
+            texture_sampler,
             vertex_buffer,
             vertex_buffer_memory,
             index_buffer,
@@ -541,7 +574,13 @@ impl VulkanApp {
             false
         };
 
-        is_queue_family_supported && is_device_extension_supported && is_swapchain_supported
+        let supported_features = unsafe { instance.get_physical_device_features(physical_device) };
+        let is_supported_sampler_anisotropy = supported_features.sampler_anisotropy != 0;
+
+        is_queue_family_supported
+            && is_device_extension_supported
+            && is_swapchain_supported
+            && is_supported_sampler_anisotropy
     }
 
     // 物理デバイスのキューファミリーでGraphicsとPresentに使えるインデックスを確認して返している
@@ -668,6 +707,7 @@ impl VulkanApp {
         }
 
         let physical_device_features = vk::PhysicalDeviceFeatures {
+            sampler_anisotropy: vk::TRUE,
             ..Default::default()
         };
 
@@ -818,6 +858,37 @@ impl VulkanApp {
         }
     }
 
+    // image viewを作成する
+    fn create_image_view(device: &Device, image: vk::Image, format: vk::Format) -> vk::ImageView {
+        let imageview_create_info = vk::ImageViewCreateInfo {
+            s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::ImageViewCreateFlags::empty(),
+            view_type: vk::ImageViewType::TYPE_2D,
+            format,
+            components: vk::ComponentMapping {
+                r: vk::ComponentSwizzle::IDENTITY,
+                g: vk::ComponentSwizzle::IDENTITY,
+                b: vk::ComponentSwizzle::IDENTITY,
+                a: vk::ComponentSwizzle::IDENTITY,
+            },
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            image,
+        };
+
+        unsafe {
+            device
+                .create_image_view(&imageview_create_info, None)
+                .expect("Failed to create Image View!")
+        }
+    }
+
     // SwapchainからImageViewを作成する
     fn create_image_views(
         device: &Device,
@@ -827,33 +898,7 @@ impl VulkanApp {
         let mut swapchain_imageviews = vec![];
 
         for &image in images.iter() {
-            let imageview_create_info = vk::ImageViewCreateInfo {
-                s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
-                p_next: ptr::null(),
-                flags: vk::ImageViewCreateFlags::empty(),
-                view_type: vk::ImageViewType::TYPE_2D,
-                format: surface_format,
-                components: vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::IDENTITY,
-                    g: vk::ComponentSwizzle::IDENTITY,
-                    b: vk::ComponentSwizzle::IDENTITY,
-                    a: vk::ComponentSwizzle::IDENTITY,
-                },
-                subresource_range: vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-                image,
-            };
-
-            let imageview = unsafe {
-                device
-                    .create_image_view(&imageview_create_info, None)
-                    .expect("Failed to create Image View!")
-            };
+            let imageview = Self::create_image_view(device, image, surface_format);
             swapchain_imageviews.push(imageview);
         }
 
@@ -925,13 +970,22 @@ impl VulkanApp {
 
     // ubo layoutを返す
     fn create_descriptor_set_layout(device: &Device) -> vk::DescriptorSetLayout {
-        let ubo_layout_bindings = [vk::DescriptorSetLayoutBinding {
-            binding: 0,
-            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: 1,
-            stage_flags: vk::ShaderStageFlags::VERTEX,
-            p_immutable_samplers: ptr::null(),
-        }];
+        let ubo_layout_bindings = [
+            vk::DescriptorSetLayoutBinding {
+                binding: 0,
+                descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 1,
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                p_immutable_samplers: ptr::null(),
+            },
+            vk::DescriptorSetLayoutBinding {
+                binding: 1,
+                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 1,
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                p_immutable_samplers: ptr::null(),
+            },
+        ];
 
         let ubo_layout_create_info = vk::DescriptorSetLayoutCreateInfo {
             s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -1242,6 +1296,97 @@ impl VulkanApp {
         }
     }
 
+    // テクスチャを作成する
+    fn create_textrue_image(
+        device: &Device,
+        command_pool: vk::CommandPool,
+        submit_queue: vk::Queue,
+        device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
+        image_path: &Path,
+    ) -> (vk::Image, vk::DeviceMemory) {
+        let mut image_object = image::open(image_path).unwrap();
+        image_object = image_object.flipv();
+        let (image_width, image_height) = (image_object.width(), image_object.height());
+        let image_size =
+            (std::mem::size_of::<u8>() as u32 * image_width * image_height * 4) as vk::DeviceSize;
+        let image_data = image_object.to_rgba().into_raw();
+
+        if image_size <= 0 {
+            panic!("Failed to load texture image!");
+        }
+
+        let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
+            device,
+            image_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            device_memory_properties,
+        );
+
+        unsafe {
+            let data_ptr = device
+                .map_memory(
+                    staging_buffer_memory,
+                    0,
+                    image_size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .expect("Failed to Map Memory") as *mut u8;
+
+            data_ptr.copy_from_nonoverlapping(image_data.as_ptr(), image_data.len());
+
+            device.unmap_memory(staging_buffer_memory);
+        }
+
+        let (texture_image, texture_image_memory) = Self::create_image(
+            device,
+            image_width,
+            image_height,
+            vk::Format::R8G8B8A8_UNORM,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            device_memory_properties,
+        );
+
+        Self::transition_image_layout(
+            device,
+            command_pool,
+            submit_queue,
+            texture_image,
+            vk::Format::R8G8B8A8_UNORM,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+
+        Self::copy_buffer_to_image(
+            device,
+            command_pool,
+            submit_queue,
+            staging_buffer,
+            texture_image,
+            image_width,
+            image_height,
+        );
+
+        Self::transition_image_layout(
+            device,
+            command_pool,
+            submit_queue,
+            texture_image,
+            vk::Format::R8G8B8A8_UNORM,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_buffer_memory, None);
+        }
+
+        (texture_image, texture_image_memory)
+    }
+
     // Vertex用のBufferを確保する
     fn create_vertex_buffer(
         device: &Device,
@@ -1489,7 +1634,7 @@ impl VulkanApp {
         panic!("Failed to find suitable memory type!")
     }
 
-    // バッファのコピーのコマンドをサブミットしま待つ
+    // バッファのコピーのコマンドをサブミットする
     fn copy_buffer(
         device: &Device,
         submit_queue: vk::Queue,
@@ -1498,6 +1643,234 @@ impl VulkanApp {
         dst_buffer: vk::Buffer,
         size: vk::DeviceSize,
     ) {
+        let command_buffer = Self::begin_single_time_command(device, command_pool);
+
+        unsafe {
+            let copy_regions = [vk::BufferCopy {
+                src_offset: 0,
+                dst_offset: 0,
+                size,
+            }];
+
+            device.cmd_copy_buffer(command_buffer, src_buffer, dst_buffer, &copy_regions);
+        }
+
+        Self::end_single_time_command(device, command_pool, submit_queue, command_buffer);
+    }
+
+    // Descriptor Poolを作成する
+    fn create_descriptor_pool(device: &Device, swapchain_image_size: usize) -> vk::DescriptorPool {
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: swapchain_image_size as u32,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: swapchain_image_size as u32,
+            },
+        ];
+
+        let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo {
+            s_type: vk::StructureType::DESCRIPTOR_POOL_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::DescriptorPoolCreateFlags::empty(),
+            max_sets: swapchain_image_size as u32,
+            pool_size_count: pool_sizes.len() as u32,
+            p_pool_sizes: pool_sizes.as_ptr(),
+        };
+
+        unsafe {
+            device
+                .create_descriptor_pool(&descriptor_pool_create_info, None)
+                .expect("Failed to create Descriptor Pool!")
+        }
+    }
+
+    // imageを作成する
+    fn create_image(
+        device: &Device,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        tiling: vk::ImageTiling,
+        usage: vk::ImageUsageFlags,
+        required_memory_properties: vk::MemoryPropertyFlags,
+        device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
+    ) -> (vk::Image, vk::DeviceMemory) {
+        let image_create_info = vk::ImageCreateInfo {
+            s_type: vk::StructureType::IMAGE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::ImageCreateFlags::empty(),
+            image_type: vk::ImageType::TYPE_2D,
+            format,
+            extent: vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            samples: vk::SampleCountFlags::TYPE_1,
+            tiling,
+            usage,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            queue_family_index_count: 0,
+            p_queue_family_indices: ptr::null(),
+            initial_layout: vk::ImageLayout::UNDEFINED,
+        };
+
+        let texture_image = unsafe {
+            device
+                .create_image(&image_create_info, None)
+                .expect("Failed to create Texture Image")
+        };
+
+        let image_memory_requirement =
+            unsafe { device.get_image_memory_requirements(texture_image) };
+        let memory_allocate_info = vk::MemoryAllocateInfo {
+            s_type: vk::StructureType::MEMORY_ALLOCATE_INFO,
+            p_next: ptr::null(),
+            allocation_size: image_memory_requirement.size,
+            memory_type_index: Self::find_memory_type(
+                image_memory_requirement.memory_type_bits,
+                required_memory_properties,
+                device_memory_properties,
+            ),
+        };
+
+        let texture_image_memory = unsafe {
+            device
+                .allocate_memory(&memory_allocate_info, None)
+                .expect("Failed to allocate Texture Image memory!")
+        };
+
+        unsafe {
+            device
+                .bind_image_memory(texture_image, texture_image_memory, 0)
+                .expect("Failed to bind Image Memory!");
+        }
+
+        (texture_image, texture_image_memory)
+    }
+
+    // image layouを変更するコマンドを発行する
+    fn transition_image_layout(
+        device: &Device,
+        command_pool: vk::CommandPool,
+        submit_queue: vk::Queue,
+        image: vk::Image,
+        _format: vk::Format,
+        old_layout: vk::ImageLayout,
+        new_layout: vk::ImageLayout,
+    ) {
+        let command_buffer = Self::begin_single_time_command(device, command_pool);
+
+        let src_access_mask;
+        let dst_access_mask;
+        let source_stage;
+        let destination_stage;
+
+        if old_layout == vk::ImageLayout::UNDEFINED
+            && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        {
+            src_access_mask = vk::AccessFlags::empty();
+            dst_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+            source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+            destination_stage = vk::PipelineStageFlags::TRANSFER;
+        } else if old_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+            && new_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        {
+            src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+            dst_access_mask = vk::AccessFlags::SHADER_READ;
+            source_stage = vk::PipelineStageFlags::TRANSFER;
+            destination_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+        } else {
+            panic!("Unsupported layout transition!")
+        }
+
+        let image_barriers = [vk::ImageMemoryBarrier {
+            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+            p_next: ptr::null(),
+            src_access_mask,
+            dst_access_mask,
+            old_layout,
+            new_layout,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            image,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+        }];
+
+        unsafe {
+            device.cmd_pipeline_barrier(
+                command_buffer,
+                source_stage,
+                destination_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &image_barriers,
+            );
+        }
+
+        Self::end_single_time_command(device, command_pool, submit_queue, command_buffer);
+    }
+
+    // バッファからイメージにコピーするコマンドを発行する
+    fn copy_buffer_to_image(
+        device: &Device,
+        command_pool: vk::CommandPool,
+        submit_queue: vk::Queue,
+        buffer: vk::Buffer,
+        image: vk::Image,
+        width: u32,
+        height: u32,
+    ) {
+        let command_buffer = Self::begin_single_time_command(device, command_pool);
+
+        let buffer_image_regions = [vk::BufferImageCopy {
+            image_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            image_extent: vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            },
+            buffer_offset: 0,
+            buffer_image_height: 0,
+            buffer_row_length: 0,
+            image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+        }];
+
+        unsafe {
+            device.cmd_copy_buffer_to_image(
+                command_buffer,
+                buffer,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &buffer_image_regions,
+            );
+        }
+
+        Self::end_single_time_command(device, command_pool, submit_queue, command_buffer);
+    }
+
+    // ワンタイムコマンドバッファの開始
+    fn begin_single_time_command(
+        device: &Device,
+        command_pool: vk::CommandPool,
+    ) -> vk::CommandBuffer {
         let allocate_info = vk::CommandBufferAllocateInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
             p_next: ptr::null(),
@@ -1524,19 +1897,25 @@ impl VulkanApp {
             device
                 .begin_command_buffer(command_buffer, &begin_info)
                 .expect("Failed to begine Command Buffer");
+        }
 
-            let copy_regions = [vk::BufferCopy {
-                src_offset: 0,
-                dst_offset: 0,
-                size,
-            }];
+        command_buffer
+    }
 
-            device.cmd_copy_buffer(command_buffer, src_buffer, dst_buffer, &copy_regions);
-
+    // ワンタイムコマンドバッファの終了
+    fn end_single_time_command(
+        device: &Device,
+        command_pool: vk::CommandPool,
+        submit_queue: vk::Queue,
+        command_buffer: vk::CommandBuffer,
+    ) {
+        unsafe {
             device
                 .end_command_buffer(command_buffer)
                 .expect("Failed to end Command Buffer");
         }
+
+        let buffers_to_submit = [command_buffer];
 
         let submit_info = [vk::SubmitInfo {
             s_type: vk::StructureType::SUBMIT_INFO,
@@ -1545,7 +1924,7 @@ impl VulkanApp {
             p_wait_semaphores: ptr::null(),
             p_wait_dst_stage_mask: ptr::null(),
             command_buffer_count: 1,
-            p_command_buffers: &command_buffer,
+            p_command_buffers: buffers_to_submit.as_ptr(),
             signal_semaphore_count: 0,
             p_signal_semaphores: ptr::null(),
         }];
@@ -1558,30 +1937,44 @@ impl VulkanApp {
                 .queue_wait_idle(submit_queue)
                 .expect("Failed to wait Queue idle");
 
-            device.free_command_buffers(command_pool, &command_buffers)
+            device.free_command_buffers(command_pool, &buffers_to_submit)
         }
     }
 
-    // Descriptor Poolを作成する
-    fn create_descriptor_pool(device: &Device, swapchain_image_size: usize) -> vk::DescriptorPool {
-        let pool_sizes = [vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: swapchain_image_size as u32,
-        }];
+    // textureのimage viewを作成する
+    fn create_texture_image_view(device: &Device, texture_image: vk::Image) -> vk::ImageView {
+        let texture_image_view =
+            Self::create_image_view(device, texture_image, vk::Format::R8G8B8A8_UNORM);
+        texture_image_view
+    }
 
-        let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo {
-            s_type: vk::StructureType::DESCRIPTOR_POOL_CREATE_INFO,
+    // textureのsamplerを作成する
+    fn create_texture_sampler(device: &Device) -> vk::Sampler {
+        let sampler_create_info = vk::SamplerCreateInfo {
+            s_type: vk::StructureType::SAMPLER_CREATE_INFO,
             p_next: ptr::null(),
-            flags: vk::DescriptorPoolCreateFlags::empty(),
-            max_sets: swapchain_image_size as u32,
-            pool_size_count: pool_sizes.len() as u32,
-            p_pool_sizes: pool_sizes.as_ptr(),
+            flags: vk::SamplerCreateFlags::empty(),
+            mag_filter: vk::Filter::LINEAR,
+            min_filter: vk::Filter::LINEAR,
+            mipmap_mode: vk::SamplerMipmapMode::LINEAR,
+            address_mode_u: vk::SamplerAddressMode::REPEAT,
+            address_mode_v: vk::SamplerAddressMode::REPEAT,
+            address_mode_w: vk::SamplerAddressMode::REPEAT,
+            mip_lod_bias: 0.0,
+            anisotropy_enable: vk::TRUE,
+            max_anisotropy: 16.0,
+            compare_enable: vk::FALSE,
+            compare_op: vk::CompareOp::ALWAYS,
+            min_lod: 0.0,
+            max_lod: 0.0,
+            border_color: vk::BorderColor::INT_OPAQUE_BLACK,
+            unnormalized_coordinates: vk::FALSE,
         };
 
         unsafe {
             device
-                .create_descriptor_pool(&descriptor_pool_create_info, None)
-                .expect("Failed to create Descriptor Pool!")
+                .create_sampler(&sampler_create_info, None)
+                .expect("Failed to create Sampler!")
         }
     }
 
@@ -1591,6 +1984,8 @@ impl VulkanApp {
         descriptor_pool: vk::DescriptorPool,
         descriptor_set_layout: vk::DescriptorSetLayout,
         uniform_buffers: &Vec<vk::Buffer>,
+        texture_image_view: vk::ImageView,
+        texture_sampler: vk::Sampler,
         swapchain_images_size: usize,
     ) -> Vec<vk::DescriptorSet> {
         let mut layouts: Vec<vk::DescriptorSetLayout> = vec![];
@@ -1619,18 +2014,40 @@ impl VulkanApp {
                 range: std::mem::size_of::<UniformBufferObject>() as u64,
             }];
 
-            let descriptor_write_sets = [vk::WriteDescriptorSet {
-                s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-                p_next: ptr::null(),
-                dst_set: descriptor_set,
-                dst_binding: 0,
-                dst_array_element: 0,
-                descriptor_count: 1,
-                descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-                p_image_info: ptr::null(),
-                p_buffer_info: descriptor_buffer_info.as_ptr(),
-                p_texel_buffer_view: ptr::null(),
+            let descriptor_image_infos = [vk::DescriptorImageInfo {
+                sampler: texture_sampler,
+                image_view: texture_image_view,
+                image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             }];
+
+            let descriptor_write_sets = [
+                // transform uniform
+                vk::WriteDescriptorSet {
+                    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
+                    p_next: ptr::null(),
+                    dst_set: descriptor_set,
+                    dst_binding: 0,
+                    dst_array_element: 0,
+                    descriptor_count: 1,
+                    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+                    p_image_info: ptr::null(),
+                    p_buffer_info: descriptor_buffer_info.as_ptr(),
+                    p_texel_buffer_view: ptr::null(),
+                },
+                // sampler uniform
+                vk::WriteDescriptorSet {
+                    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
+                    p_next: ptr::null(),
+                    dst_set: descriptor_set,
+                    dst_binding: 1,
+                    dst_array_element: 0,
+                    descriptor_count: 1,
+                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                    p_image_info: descriptor_image_infos.as_ptr(),
+                    p_buffer_info: ptr::null(),
+                    p_texel_buffer_view: ptr::null(),
+                },
+            ];
 
             unsafe {
                 device.update_descriptor_sets(&descriptor_write_sets, &[]);
@@ -1949,6 +2366,8 @@ impl VulkanApp {
             self.descriptor_pool,
             self.ubo_layout,
             &self.uniform_buffers,
+            self.texture_image_view,
+            self.texture_sampler,
             self.swapchain_images.len(),
         );
         self.command_buffers = Self::create_command_buffers(
@@ -2029,6 +2448,12 @@ impl Drop for VulkanApp {
             self.device.free_memory(self.index_buffer_memory, None);
             self.device.destroy_buffer(self.vertex_buffer, None);
             self.device.free_memory(self.vertex_buffer_memory, None);
+
+            self.device.destroy_sampler(self.texture_sampler, None);
+            self.device
+                .destroy_image_view(self.texture_image_view, None);
+            self.device.destroy_image(self.texture_image, None);
+            self.device.free_memory(self.texture_image_memory, None);
 
             self.device.destroy_command_pool(self.command_pool, None);
 
