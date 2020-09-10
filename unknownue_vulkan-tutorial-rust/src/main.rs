@@ -40,7 +40,9 @@ const VALIDATION: &[&str] = &[
 ];
 const DEVICE_EXTENSIONS: &[&str] = &["VK_KHR_swapchain"];
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
-const TEXTURE_PATH: &'static str = "textures/texture.jpg";
+
+const MODEL_PATH: &'static str = "models/viking_room.obj";
+const TEXTURE_PATH: &'static str = "textures/viking_room.png";
 
 unsafe extern "system" fn vulkan_debug_utils_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -143,8 +145,8 @@ struct SyncObjects {
 #[repr(C)]
 #[derive(Debug, Clone)]
 struct Vertex {
-    pos: [f32; 3],
-    color: [f32; 3],
+    pos: [f32; 4],
+    color: [f32; 4],
     pub tex_coord: [f32; 2],
 }
 impl Vertex {
@@ -162,14 +164,14 @@ impl Vertex {
             vk::VertexInputAttributeDescription {
                 binding: 0,
                 location: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
+                format: vk::Format::R32G32B32A32_SFLOAT,
                 offset: offset_of!(Self, pos) as u32,
             },
             // inColor
             vk::VertexInputAttributeDescription {
                 binding: 0,
                 location: 1,
-                format: vk::Format::R32G32B32_SFLOAT,
+                format: vk::Format::R32G32B32A32_SFLOAT,
                 offset: offset_of!(Self, color) as u32,
             },
             // inTexCoord
@@ -182,50 +184,6 @@ impl Vertex {
         ]
     }
 }
-
-const VERTICES_DATA: [Vertex; 8] = [
-    Vertex {
-        pos: [-0.75, -0.75, 0.0],
-        color: [1.0, 0.0, 0.0],
-        tex_coord: [0.0, 0.0],
-    },
-    Vertex {
-        pos: [0.75, -0.75, 0.0],
-        color: [0.0, 1.0, 0.0],
-        tex_coord: [1.0, 0.0],
-    },
-    Vertex {
-        pos: [0.75, 0.75, 0.0],
-        color: [0.0, 0.0, 1.0],
-        tex_coord: [1.0, 1.0],
-    },
-    Vertex {
-        pos: [-0.75, 0.75, 0.0],
-        color: [1.0, 1.0, 1.0],
-        tex_coord: [0.0, 1.0],
-    },
-    Vertex {
-        pos: [-0.75, -0.75, -0.75],
-        color: [1.0, 0.0, 0.0],
-        tex_coord: [0.0, 0.0],
-    },
-    Vertex {
-        pos: [0.75, -0.75, -0.75],
-        color: [0.0, 1.0, 0.0],
-        tex_coord: [1.0, 0.0],
-    },
-    Vertex {
-        pos: [0.75, 0.75, -0.75],
-        color: [0.0, 0.0, 1.0],
-        tex_coord: [1.0, 1.0],
-    },
-    Vertex {
-        pos: [-0.75, 0.75, -0.75],
-        color: [1.0, 1.0, 1.0],
-        tex_coord: [0.0, 1.0],
-    },
-];
-const INDICES_DATA: [u32; 12] = [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4];
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -267,6 +225,8 @@ struct VulkanApp {
     texture_image_memory: vk::DeviceMemory,
     texture_image_view: vk::ImageView,
     texture_sampler: vk::Sampler,
+    _vertices: Vec<Vertex>,
+    indices: Vec<u32>,
     vertex_buffer: vk::Buffer,
     vertex_buffer_memory: vk::DeviceMemory,
     index_buffer: vk::Buffer,
@@ -345,6 +305,7 @@ impl VulkanApp {
             depth_image_view,
             &swapchain_stuff.swapchain_extent,
         );
+        let (vertices, indices) = Self::load_model(&Path::new(MODEL_PATH));
         let (texture_image, texture_image_memory) = Self::create_textrue_image(
             &logical_device,
             command_pool,
@@ -359,14 +320,14 @@ impl VulkanApp {
             &physical_device_memory_properties,
             command_pool,
             graphics_queue,
-            &VERTICES_DATA,
+            &vertices,
         );
         let (index_buffer, index_buffer_memory) = Self::create_index_buffer(
             &logical_device,
             &physical_device_memory_properties,
             command_pool,
             graphics_queue,
-            &INDICES_DATA,
+            &indices,
         );
         let (uniform_buffers, uniform_buffers_memory) = Self::create_uniform_buffers(
             &logical_device,
@@ -395,6 +356,7 @@ impl VulkanApp {
             index_buffer,
             pipeline_layout,
             &descriptor_sets,
+            indices.len() as u32,
         );
         let sync_objects = Self::create_sync_objects(&logical_device);
 
@@ -430,6 +392,8 @@ impl VulkanApp {
             texture_image_memory,
             texture_image_view,
             texture_sampler,
+            _vertices: vertices,
+            indices,
             vertex_buffer,
             vertex_buffer_memory,
             index_buffer,
@@ -1457,6 +1421,42 @@ impl VulkanApp {
         framebuffers
     }
 
+    // objのモデルをロードする
+    fn load_model(model_path: &Path) -> (Vec<Vertex>, Vec<u32>) {
+        let model_obj = tobj::load_obj(model_path, true).expect("Failed to load model object!");
+
+        let mut vertices = vec![];
+        let mut indices = vec![];
+
+        let (models, _) = model_obj;
+        for m in models.iter() {
+            let mesh = &m.mesh;
+
+            if mesh.texcoords.len() == 0 {
+                panic!("Missing texture coorinate for the model.");
+            }
+
+            let total_vertices_count = mesh.positions.len() / 3;
+            for i in 0..total_vertices_count {
+                let vertex = Vertex {
+                    pos: [
+                        mesh.positions[i * 3],
+                        mesh.positions[i * 3 + 1],
+                        mesh.positions[i * 3 + 2],
+                        1.0,
+                    ],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    tex_coord: [mesh.texcoords[i * 2], mesh.texcoords[i * 2 + 1]],
+                };
+                vertices.push(vertex);
+            }
+
+            indices = mesh.indices.clone();
+        }
+
+        (vertices, indices)
+    }
+
     // graphics用のコマンドプールを作成する
     fn create_command_pool(
         device: &Device,
@@ -1524,7 +1524,7 @@ impl VulkanApp {
             image_height,
             1,
             vk::SampleCountFlags::TYPE_1,
-            vk::Format::R8G8B8A8_UNORM,
+            vk::Format::R8G8B8A8_SRGB,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -1536,7 +1536,7 @@ impl VulkanApp {
             command_pool,
             submit_queue,
             texture_image,
-            vk::Format::R8G8B8A8_UNORM,
+            vk::Format::R8G8B8A8_SRGB,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         );
@@ -1556,7 +1556,7 @@ impl VulkanApp {
             command_pool,
             submit_queue,
             texture_image,
-            vk::Format::R8G8B8A8_UNORM,
+            vk::Format::R8G8B8A8_SRGB,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
@@ -1597,7 +1597,7 @@ impl VulkanApp {
                 )
                 .expect("Failed to Map Memory") as *mut Vertex;
 
-            data_ptr.copy_from_nonoverlapping(VERTICES_DATA.as_ptr(), VERTICES_DATA.len());
+            data_ptr.copy_from_nonoverlapping(vertices_data.as_ptr(), vertices_data.len());
 
             device.unmap_memory(staging_buffer_memory);
         }
@@ -1655,7 +1655,7 @@ impl VulkanApp {
                 )
                 .expect("Failed to Map Memory") as *mut u32;
 
-            data_ptr.copy_from_nonoverlapping(INDICES_DATA.as_ptr(), INDICES_DATA.len());
+            data_ptr.copy_from_nonoverlapping(indices_data.as_ptr(), indices_data.len());
 
             device.unmap_memory(staging_buffer_memory);
         }
@@ -2130,7 +2130,7 @@ impl VulkanApp {
         let texture_image_view = Self::create_image_view(
             device,
             texture_image,
-            vk::Format::R8G8B8A8_UNORM,
+            vk::Format::R8G8B8A8_SRGB,
             vk::ImageAspectFlags::COLOR,
             1,
         );
@@ -2258,6 +2258,7 @@ impl VulkanApp {
         index_buffer: vk::Buffer,
         pipeline_layout: vk::PipelineLayout,
         descriptor_sets: &Vec<vk::DescriptorSet>,
+        index_count: u32,
     ) -> Vec<vk::CommandBuffer> {
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
@@ -2349,7 +2350,7 @@ impl VulkanApp {
                     &[],
                 );
 
-                device.cmd_draw_indexed(command_buffer, INDICES_DATA.len() as u32, 1, 0, 0, 0);
+                device.cmd_draw_indexed(command_buffer, index_count, 1, 0, 0, 0);
 
                 device.cmd_end_render_pass(command_buffer);
 
@@ -2597,6 +2598,7 @@ impl VulkanApp {
             self.index_buffer,
             self.pipeline_layout,
             &self.descriptor_sets,
+            self.indices.len() as u32,
         );
     }
 
