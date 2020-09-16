@@ -7,3 +7,4 @@
 
 - [unknownue/vulkan-tutorial-rust: Following the vulkan tutorial(https://vulkan-tutorial.com/) using the Rust programming language.](https://github.com/unknownue/vulkan-tutorial-rust)
 - [3DグラフィクスAPI Vulkanを出来るだけやさしく解説する本(PDF版) - FADIS PRESS - BOOTH](https://booth.pm/ja/items/1562222)
+- [Vulkan Programming Vol.1 - すらりんラボ - BOOTH](https://booth.pm/ja/items/1286100)

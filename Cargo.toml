@@ -2,4 +2,5 @@
 members = [
   "unknownue_vulkan-tutorial-rust",
   "fadis_vulkan_sample_2019",
+  "techlabxe_vulkan_book_1",
 ]
