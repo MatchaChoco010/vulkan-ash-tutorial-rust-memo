@@ -29,6 +29,7 @@ impl WindowEventLoop {
             .expect("Failed to create window");
 
         app.init(&window).expect("Failed to init app");
+        app.prepare().expect("Failed to call prepare");
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
@@ -55,7 +56,6 @@ impl WindowEventLoop {
                     },
                 },
                 Event::MainEventsCleared => {
-                    app.prepare().expect("Failed to call prepare");
                     window.request_redraw();
                 }
                 Event::RedrawRequested(_window_id) => {

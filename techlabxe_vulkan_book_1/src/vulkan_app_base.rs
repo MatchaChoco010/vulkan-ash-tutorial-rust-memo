@@ -5,7 +5,10 @@
 
 use anyhow::Result;
 use ash::{
-    extensions::khr::{Surface, Swapchain},
+    extensions::{
+        ext::DebugUtils,
+        khr::{Surface, Swapchain},
+    },
     version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
     vk, Device, Entry, Instance,
 };
@@ -56,6 +59,8 @@ pub trait VulkanAppBase {
 pub struct DefaultVulkanAppBase {
     entry: Option<Entry>,
     instance: Option<Instance>,
+    debug_utils_loader: Option<DebugUtils>,
+    debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
     surface_loader: Option<Surface>,
     surface: Option<vk::SurfaceKHR>,
     physical_device: Option<vk::PhysicalDevice>,
@@ -89,6 +94,8 @@ impl DefaultVulkanAppBase {
         Self {
             entry: None,
             instance: None,
+            debug_utils_loader: None,
+            debug_messenger: None,
             surface_loader: None,
             surface: None,
             physical_device: None,
@@ -130,30 +137,7 @@ impl DefaultVulkanAppBase {
         self.instance.as_ref().expect("Not initialized")
     }
 
-    /// Instanceを作成する。
-    /// debugモードかreleaseモードかによって処理内容が違う。
-    /// debugモードの場合はデバッグのコールバックと
-    /// バリデーションレイヤーを有効にしたインスタンスを返す。
-    /// releaseモードの場合はプレーンなインスタンスを返す。
-    /// どちらの場合もSurfaceを作成するのに必要なextensionを要求する。
-    fn init_instance(&mut self, entry: &Entry, window: &Window) -> Result<()> {
-        // applicationi info
-        let app_name = CString::new(APP_NAME).unwrap();
-        let engine_name = CString::new("Vulkan Engine").unwrap();
-        let app_info = vk::ApplicationInfo::builder()
-            .api_version(vk::make_version(1, 2, 0))
-            .application_version(vk::make_version(0, 1, 0))
-            .application_name(&app_name)
-            .engine_version(vk::make_version(0, 1, 0))
-            .engine_name(&engine_name);
-
-        // Surface作成に必要なextensionの取得
-        let extension_names = enumerate_required_extensions(window)?;
-        let extension_names: Vec<_> = extension_names
-            .iter()
-            .map(|extension_name| extension_name.as_ptr())
-            .collect();
-
+    fn populate_debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT {
         // デバッグのコールバック関数
         unsafe extern "system" fn callback(
             message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -179,20 +163,49 @@ impl DefaultVulkanAppBase {
 
             vk::FALSE
         }
-        let mut debug_utils_messenger_create_info_ext =
-            vk::DebugUtilsMessengerCreateInfoEXT::builder()
-                .message_severity(
-                    vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+        let debug_utils_messenger_create_info_ext = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+            .message_severity(
+                vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
                         | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
                         // | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
                         | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
-                )
-                .message_type(
-                    vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
-                        | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION,
-                )
-                .pfn_user_callback(Some(callback));
+            )
+            .message_type(
+                vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                    | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
+                    | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION,
+            )
+            .pfn_user_callback(Some(callback));
+
+        debug_utils_messenger_create_info_ext.build()
+    }
+
+    /// Instanceを作成する。
+    /// debugモードかreleaseモードかによって処理内容が違う。
+    /// debugモードの場合はデバッグのコールバックと
+    /// バリデーションレイヤーを有効にしたインスタンスを返す。
+    /// releaseモードの場合はプレーンなインスタンスを返す。
+    /// どちらの場合もSurfaceを作成するのに必要なextensionを要求する。
+    fn init_instance(&mut self, window: &Window) -> Result<()> {
+        // applicationi info
+        let app_name = CString::new(APP_NAME).unwrap();
+        let engine_name = CString::new("Vulkan Engine").unwrap();
+        let app_info = vk::ApplicationInfo::builder()
+            .api_version(vk::make_version(1, 2, 0))
+            .application_version(vk::make_version(0, 1, 0))
+            .application_name(&app_name)
+            .engine_version(vk::make_version(0, 1, 0))
+            .engine_name(&engine_name);
+
+        // Surface作成に必要なextensionの取得
+        let extension_names = enumerate_required_extensions(window)?;
+        let mut extension_names: Vec<_> = extension_names
+            .iter()
+            .map(|extension_name| extension_name.as_ptr())
+            .collect();
+        if ENABLE_VALIDATION_LAYERS {
+            extension_names.push(DebugUtils::name().as_ptr());
+        }
 
         // Validationに必要なレイヤー
         let enabled_layer_names: Vec<CString> = VALIDATION
@@ -203,6 +216,9 @@ impl DefaultVulkanAppBase {
             .iter()
             .map(|layer_name| layer_name.as_ptr())
             .collect();
+
+        let mut debug_utils_messenger_create_info_ext =
+            Self::populate_debug_messenger_create_info();
 
         // instance create info
         let create_info = vk::InstanceCreateInfo::builder()
@@ -216,9 +232,40 @@ impl DefaultVulkanAppBase {
         };
 
         // instanceの作成
-        self.instance = Some(unsafe { entry.create_instance(&create_info, None)? });
+        self.instance = Some(unsafe { self.entry().create_instance(&create_info, None)? });
 
         Ok(())
+    }
+
+    /// debug_utils_loaderを取得する。
+    /// 構造体が初期化済みであることを要求するので注意。
+    pub fn debug_utils_loader(&self) -> &DebugUtils {
+        self.debug_utils_loader.as_ref().expect("Not initialized")
+    }
+
+    /// debug_messengerを取得する。
+    /// 構造体が初期化済みであることを要求するので注意。
+    pub fn debug_messenger(&self) -> &vk::DebugUtilsMessengerEXT {
+        self.debug_messenger.as_ref().expect("Not initialized")
+    }
+
+    /// debug utilsをセットアップする
+    fn setup_debug_utils(&mut self) {
+        let debug_utils_loader = DebugUtils::new(self.entry(), self.instance());
+
+        if ENABLE_VALIDATION_LAYERS == false {
+            self.debug_utils_loader = Some(debug_utils_loader);
+            self.debug_messenger = Some(vk::DebugUtilsMessengerEXT::null());
+        } else {
+            let messenger_ci = Self::populate_debug_messenger_create_info();
+            let util_messenger = unsafe {
+                debug_utils_loader
+                    .create_debug_utils_messenger(&messenger_ci, None)
+                    .expect("Debug Utils Callback")
+            };
+            self.debug_utils_loader = Some(debug_utils_loader);
+            self.debug_messenger = Some(util_messenger);
+        }
     }
 
     /// surface_loaderを取得する。
@@ -235,9 +282,9 @@ impl DefaultVulkanAppBase {
     }
 
     /// Surfaceの作成を行う。
-    fn init_surface(&mut self, entry: &Entry, window: &Window) -> Result<()> {
-        let surface_loader = Surface::new(entry, self.instance());
-        let surface = unsafe { create_surface(entry, self.instance(), window, None)? };
+    fn init_surface(&mut self, window: &Window) -> Result<()> {
+        let surface_loader = Surface::new(self.entry(), self.instance());
+        let surface = unsafe { create_surface(self.entry(), self.instance(), window, None)? };
 
         self.surface_loader = Some(surface_loader);
         self.surface = Some(surface);
@@ -907,9 +954,10 @@ impl DefaultVulkanAppBase {
 
 impl VulkanAppBase for DefaultVulkanAppBase {
     fn init(&mut self, window: &Window) -> Result<()> {
-        let entry = Entry::new()?;
-        self.init_instance(&entry, window)?;
-        self.init_surface(&entry, window)?;
+        self.entry = Some(Entry::new()?);
+        self.init_instance(window)?;
+        self.setup_debug_utils();
+        self.init_surface(window)?;
         self.select_physical_device()?;
         self.create_device()?;
         self.get_queues();
@@ -956,6 +1004,10 @@ impl VulkanAppBase for DefaultVulkanAppBase {
                 .destroy_command_pool(*self.graphics_command_pool(), None);
             self.device().destroy_device(None);
             self.surface_loader().destroy_surface(*self.surface(), None);
+            if ENABLE_VALIDATION_LAYERS {
+                self.debug_utils_loader()
+                    .destroy_debug_utils_messenger(*self.debug_messenger(), None);
+            }
             self.instance().destroy_instance(None);
         }
         Ok(())
