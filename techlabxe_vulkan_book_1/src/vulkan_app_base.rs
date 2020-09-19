@@ -56,6 +56,9 @@ pub trait VulkanAppBase {
 /// WindowEventLoopの内部であとからWindowを渡して初期化することになる。
 /// 初期化を遅延するためにすべてのメンバをOptionにくるんでいる。
 /// 初期化後はフィールドと同名のメソッドでunwrapして取得できる。
+///
+/// Builderパターンとか使って初期化前の状態を型として分離したほうが良かったかも。
+/// 今回はこのまま放置で次回以降はBuilderパターンを使ってみよう。
 pub struct DefaultVulkanAppBase {
     entry: Option<Entry>,
     instance: Option<Instance>,
