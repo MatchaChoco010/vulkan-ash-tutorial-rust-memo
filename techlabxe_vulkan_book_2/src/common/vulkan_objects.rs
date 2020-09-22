@@ -830,18 +830,17 @@ impl SwapchainObject {
         present_queue: vk::Queue,
         index: usize,
         wait_semaphore: vk::Semaphore,
-    ) -> Result<()> {
-        unsafe {
+    ) -> Result<bool> {
+        let is_suboptimal = unsafe {
             self.swapchain_loader.queue_present(
                 present_queue,
                 &vk::PresentInfoKHR::builder()
                     .swapchains(&[self.swapchain])
                     .image_indices(&[index as u32])
                     .wait_semaphores(&[wait_semaphore]),
-            )?;
-        }
-
-        Ok(())
+            )?
+        };
+        Ok(is_suboptimal)
     }
 
     /// formatを取得する

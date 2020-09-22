@@ -41,5 +41,5 @@ pub trait VulkanAppBase: Drop {
     fn prepare(&mut self) -> Result<()>;
 
     /// 描画処理を行う。
-    fn render(&mut self) -> Result<()>;
+    fn render(&mut self, window: &Window) -> Result<()>;
 }

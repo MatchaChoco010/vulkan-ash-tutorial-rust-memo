@@ -660,7 +660,7 @@ impl VulkanAppBase for DefaultVulkanAppBase {
     }
 
     /// 描画処理を行う。
-    fn render(&mut self) -> Result<()> {
+    fn render(&mut self, _window: &Window) -> Result<()> {
         Ok(())
     }
 }

@@ -6,7 +6,7 @@ use anyhow::Result;
 use ash::{version::DeviceV1_0, vk, Device};
 use cgmath::{Deg, Matrix4, Point3, Vector3};
 use memoffset::offset_of;
-use winit::window::Window;
+use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::common::{
     cgmath_ext::Matrix4Ext,
@@ -427,7 +427,7 @@ impl VulkanAppBase for ResizableApp {
         Ok(())
     }
 
-    fn render(&mut self) -> Result<()> {
+    fn render(&mut self, window: &Window) -> Result<()> {
         let device = self.base.device();
 
         let image_index = self
@@ -511,11 +511,15 @@ impl VulkanAppBase for ResizableApp {
             )?;
         }
 
-        self.base.swapchain().queue_present(
+        let is_suboptimal = self.base.swapchain().queue_present(
             self.base.present_queue(),
             image_index,
             self.base.render_finish_semaphore(),
         )?;
+        if is_suboptimal {
+            let PhysicalSize { width, height } = window.inner_size();
+            self.on_window_size_changed(width, height)?;
+        }
 
         Ok(())
     }

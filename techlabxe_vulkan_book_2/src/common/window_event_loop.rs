@@ -136,7 +136,7 @@ impl WindowEventLoop {
                 if is_minimize {
                     return;
                 }
-                app.render().expect("Failed to call render");
+                app.render(&window).expect("Failed to call render");
             }
             Event::LoopDestroyed => (),
             _ => (),
