@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use anyhow::Result;
-use winit::window::Window;
+use winit::{event::Event, window::Window};
 
 pub trait VulkanAppBaseBuilder {
     type Item: VulkanAppBase;
@@ -25,20 +25,22 @@ pub trait VulkanAppBase: Drop {
     /// ウィンドウサイズ変化時のイベント関数。
     fn on_window_size_changed(&mut self, width: u32, height: u32) -> Result<()>;
     /// マウスダウン。
-    fn on_mouse_button_down(&mut self, _button: i32) -> Result<()> {
-        Ok(())
-    }
+    fn on_mouse_button_down(&mut self, _button: i32) {}
     /// マウスアップ。
-    fn on_mouse_button_up(&mut self, _button: i32) -> Result<()> {
-        Ok(())
-    }
+    fn on_mouse_button_up(&mut self, _button: i32) {}
     /// マウスムーブ。
-    fn on_mouse_move(&mut self, _dx: i32, _dy: i32) -> Result<()> {
-        Ok(())
-    }
+    fn on_mouse_move(&mut self, _dx: i32, _dy: i32) {}
+    /// イベント開始
+    fn on_new_events(&mut self) {}
+    /// メインイベントクリア
+    fn on_main_events_cleared(&mut self, _window: &Window) {}
+    /// handle event
+    fn handle_event(&mut self, _window: &Window, _event: &Event<()>) {}
 
     /// 描画の準備を行う。
-    fn prepare(&mut self) -> Result<()>;
+    fn prepare(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     /// 描画処理を行う。
     fn render(&mut self, window: &Window) -> Result<()>;

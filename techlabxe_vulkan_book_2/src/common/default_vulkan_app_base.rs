@@ -654,11 +654,6 @@ impl VulkanAppBase for DefaultVulkanAppBase {
         Ok(())
     }
 
-    /// 描画の準備を行う。
-    fn prepare(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     /// 描画処理を行う。
     fn render(&mut self, _window: &Window) -> Result<()> {
         Ok(())

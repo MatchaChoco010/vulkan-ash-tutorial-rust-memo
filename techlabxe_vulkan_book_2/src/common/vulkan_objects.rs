@@ -933,6 +933,41 @@ impl RenderPassObject {
         })
     }
 
+    /// Imgui用のDepthのないRenderPassの作成。
+    pub fn new_no_depth(device: Rc<Device>, format: vk::Format) -> Result<Self> {
+        // Attachments
+        let attachments = [vk::AttachmentDescription::builder()
+            .format(format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::LOAD)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .build()];
+        // color reference
+        let color_reference = [vk::AttachmentReference::builder()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .build()];
+        // subpass descriptionを作成
+        let subpasses = [vk::SubpassDescription::builder()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(&color_reference)
+            .build()];
+        // render passの作成
+        let render_pass_create_info = vk::RenderPassCreateInfo::builder()
+            .attachments(&attachments)
+            .subpasses(&subpasses);
+        let render_pass = unsafe { device.create_render_pass(&render_pass_create_info, None)? };
+
+        Ok(Self {
+            render_pass,
+            device,
+        })
+    }
+
     /// RenderPassの取得。
     pub fn render_pass(&self) -> vk::RenderPass {
         self.render_pass
@@ -963,6 +998,34 @@ impl FramebufferObject {
         height: u32,
     ) -> Result<Self> {
         let attachments = [image_view, *depth_buffer.image_view()];
+
+        let framebuffer = unsafe {
+            device.create_framebuffer(
+                &vk::FramebufferCreateInfo::builder()
+                    .render_pass(render_pass.render_pass())
+                    .attachments(&attachments)
+                    .width(width)
+                    .height(height)
+                    .layers(1),
+                None,
+            )?
+        };
+
+        Ok(Self {
+            framebuffer,
+            device,
+        })
+    }
+
+    /// DepthBuffer無しでFramebufferを作成する。
+    pub fn new_no_depth(
+        device: Rc<Device>,
+        image_view: vk::ImageView,
+        render_pass: &RenderPassObject,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let attachments = [image_view];
 
         let framebuffer = unsafe {
             device.create_framebuffer(
