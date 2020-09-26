@@ -200,6 +200,7 @@ pub struct ShaderReadOnlyImageObject {
     view: vk::ImageView,
     allocator: Rc<vk_mem::Allocator>,
     device: Rc<Device>,
+    size: (u32, u32),
 }
 impl ShaderReadOnlyImageObject {
     /// 画像を読み込む。
@@ -400,6 +401,7 @@ impl ShaderReadOnlyImageObject {
             view: image_view,
             allocator,
             device,
+            size: (image_width, image_height),
         })
     }
 
@@ -412,8 +414,112 @@ impl ShaderReadOnlyImageObject {
     pub fn image_view(&self) -> &vk::ImageView {
         &self.view
     }
+
+    /// 画像サイズを取得する。
+    pub fn image_size(&self) -> (u32, u32) {
+        self.size
+    }
 }
 impl Drop for ShaderReadOnlyImageObject {
+    fn drop(&mut self) {
+        self.allocator
+            .destroy_image(self.image, &self.allocation)
+            .expect("Failed to destroy image");
+        unsafe { self.device.destroy_image_view(self.view, None) };
+    }
+}
+
+/// デバイスローカルなイメージのオブジェクト。
+/// LayoutはUNDEFINED。
+/// UsageはColorAttachmentとSampled、
+/// vk_memを利用してアロケートする。
+/// Dropで自動的にメモリを開放する。
+pub struct TextureRenderingImageObject {
+    image: vk::Image,
+    allocation: vk_mem::Allocation,
+    view: vk::ImageView,
+    allocator: Rc<vk_mem::Allocator>,
+    device: Rc<Device>,
+    size: (u32, u32),
+}
+impl TextureRenderingImageObject {
+    /// 新しく生成する。
+    pub fn new(
+        device: Rc<Device>,
+        allocator: Rc<vk_mem::Allocator>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        // Imageの作成
+        let (image, image_allocation, _info) = allocator.create_image(
+            &vk::ImageCreateInfo::builder()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(vk::Format::R8G8B8A8_UNORM)
+                .extent(vk::Extent3D {
+                    width: width,
+                    height: height,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED),
+            &vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::GpuOnly,
+                ..Default::default()
+            },
+        )?;
+        let image_view = unsafe {
+            device.create_image_view(
+                &vk::ImageViewCreateInfo::builder()
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .image(image)
+                    .format(vk::Format::R8G8B8A8_UNORM)
+                    .components(vk::ComponentMapping {
+                        r: vk::ComponentSwizzle::IDENTITY,
+                        g: vk::ComponentSwizzle::IDENTITY,
+                        b: vk::ComponentSwizzle::IDENTITY,
+                        a: vk::ComponentSwizzle::IDENTITY,
+                    })
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    }),
+                None,
+            )?
+        };
+
+        Ok(Self {
+            image,
+            allocation: image_allocation,
+            view: image_view,
+            allocator: Rc::clone(&allocator),
+            device: Rc::clone(&device),
+            size: (width, height),
+        })
+    }
+
+    /// vk::Imageを取得する。
+    pub fn image(&self) -> vk::Image {
+        self.image
+    }
+
+    /// vk::ImageViewを取得する。
+    pub fn image_view(&self) -> vk::ImageView {
+        self.view
+    }
+
+    /// 画像サイズを取得する。
+    pub fn image_size(&self) -> (u32, u32) {
+        self.size
+    }
+}
+impl Drop for TextureRenderingImageObject {
     fn drop(&mut self) {
         self.allocator
             .destroy_image(self.image, &self.allocation)
@@ -968,6 +1074,58 @@ impl RenderPassObject {
         })
     }
 
+    /// final layoutがColorAttachmentOptimalなレンダーパスを返す。
+    pub fn new_color_attachment_optimal(device: Rc<Device>, format: vk::Format) -> Result<Self> {
+        // Attachments
+        let attachments = [
+            vk::AttachmentDescription::builder()
+                .format(format)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .build(),
+            vk::AttachmentDescription::builder()
+                .format(vk::Format::D32_SFLOAT)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                .build(),
+        ];
+        // color reference
+        let color_reference = [vk::AttachmentReference::builder()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .build()];
+        // depth reference
+        let depth_reference = vk::AttachmentReference::builder()
+            .attachment(1)
+            .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        // subpass descriptionを作成
+        let subpasses = [vk::SubpassDescription::builder()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(&color_reference)
+            .depth_stencil_attachment(&depth_reference)
+            .build()];
+        // render passの作成
+        let render_pass_create_info = vk::RenderPassCreateInfo::builder()
+            .attachments(&attachments)
+            .subpasses(&subpasses);
+        let render_pass = unsafe { device.create_render_pass(&render_pass_create_info, None)? };
+
+        Ok(Self {
+            render_pass,
+            device,
+        })
+    }
+
     /// RenderPassの取得。
     pub fn render_pass(&self) -> vk::RenderPass {
         self.render_pass
@@ -1304,6 +1462,166 @@ impl PipelineObject {
         })
     }
 
+    /// GraphicsPipelineObjectを生成する。
+    /// Vertexなしの不透明の描画用パイプライン。
+    pub fn new_opaque_no_vertex(
+        device: Rc<Device>,
+        vertex_shader_pass: &Path,
+        fragment_shader_pass: &Path,
+        width: u32,
+        height: u32,
+        render_pass: &RenderPassObject,
+        descriptor_set_layout: &DescriptorSetLayoutObject,
+    ) -> Result<Self> {
+        // 頂点入力設定
+        let vertex_input_state_create_info = vk::PipelineVertexInputStateCreateInfo::builder();
+
+        // ビューポートの設定
+        let viewports = [vk::Viewport::builder()
+            .x(0.0)
+            .y(height as f32)
+            .width(width as f32)
+            .height(-1.0 * height as f32)
+            .min_depth(0.0)
+            .max_depth(1.0)
+            .build()];
+        let scissors = [vk::Rect2D::builder()
+            .offset(vk::Offset2D { x: 0, y: 0 })
+            .extent(vk::Extent2D { width, height })
+            .build()];
+        let viewport_state_create_info = vk::PipelineViewportStateCreateInfo::builder()
+            .viewports(&viewports)
+            .scissors(&scissors);
+
+        // プリミティブトポロジー設定
+        let input_assembly_state_create_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+
+        // ラスタライザーステート設定
+        let rasterization_state_createa_info = vk::PipelineRasterizationStateCreateInfo::builder()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+
+        // パイプラインレイアウト
+        let pipeline_layout = unsafe {
+            device.create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::builder()
+                    .set_layouts(&[descriptor_set_layout.descriptor_set_layout()]),
+                None,
+            )?
+        };
+
+        // マルチサンプル設定
+        let multisample_state_create_info = vk::PipelineMultisampleStateCreateInfo::builder()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        // ブレンディングの設定
+        let color_blend_attachments_state = [vk::PipelineColorBlendAttachmentState::builder()
+            .color_write_mask(
+                vk::ColorComponentFlags::R
+                    | vk::ColorComponentFlags::G
+                    | vk::ColorComponentFlags::B
+                    | vk::ColorComponentFlags::A,
+            )
+            .build()];
+        let color_blend_state_create_info = vk::PipelineColorBlendStateCreateInfo::builder()
+            .attachments(&color_blend_attachments_state);
+
+        // デプスステンシルステート設定
+        let stencil_op = vk::StencilOpState::builder()
+            .fail_op(vk::StencilOp::KEEP)
+            .pass_op(vk::StencilOp::KEEP)
+            .compare_op(vk::CompareOp::ALWAYS)
+            .build();
+        let depth_stencil_state_create_info = vk::PipelineDepthStencilStateCreateInfo::builder()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false)
+            .front(stencil_op)
+            .back(stencil_op);
+
+        // シェーダバイナリの読み込み
+        let vertex_shader_module = {
+            use std::fs::File;
+            use std::io::Read;
+
+            let spv_file = File::open(vertex_shader_pass)?;
+            let bytes_code: Vec<u8> = spv_file.bytes().filter_map(|byte| byte.ok()).collect();
+
+            let shader_module_create_info = vk::ShaderModuleCreateInfo {
+                code_size: bytes_code.len(),
+                p_code: bytes_code.as_ptr() as *const u32,
+                ..Default::default()
+            };
+            unsafe { device.create_shader_module(&shader_module_create_info, None)? }
+        };
+        let fragment_shader_module = {
+            use std::fs::File;
+            use std::io::Read;
+
+            let spv_file = File::open(fragment_shader_pass)?;
+            let bytes_code: Vec<u8> = spv_file.bytes().filter_map(|byte| byte.ok()).collect();
+
+            let shader_module_create_info = vk::ShaderModuleCreateInfo {
+                code_size: bytes_code.len(),
+                p_code: bytes_code.as_ptr() as *const u32,
+                ..Default::default()
+            };
+            unsafe { device.create_shader_module(&shader_module_create_info, None)? }
+        };
+        // main関数の名前
+        let main_function_name = CString::new("main").unwrap();
+        // shader stage create info
+        let pipeline_shader_stage_create_info = [
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vertex_shader_module)
+                .name(&main_function_name)
+                .build(),
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(fragment_shader_module)
+                .name(&main_function_name)
+                .build(),
+        ];
+
+        // パイプラインの構築
+        let pipeline_create_info = [vk::GraphicsPipelineCreateInfo::builder()
+            .stages(&pipeline_shader_stage_create_info)
+            .vertex_input_state(&vertex_input_state_create_info)
+            .input_assembly_state(&input_assembly_state_create_info)
+            .viewport_state(&viewport_state_create_info)
+            .rasterization_state(&rasterization_state_createa_info)
+            .multisample_state(&multisample_state_create_info)
+            .depth_stencil_state(&depth_stencil_state_create_info)
+            .color_blend_state(&color_blend_state_create_info)
+            .layout(pipeline_layout)
+            .render_pass(render_pass.render_pass())
+            .build()];
+        let pipeline = unsafe {
+            device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_create_info, None)
+                .unwrap()[0]
+        };
+
+        // ShaderModuleはもう不要のため破棄
+        unsafe {
+            device.destroy_shader_module(vertex_shader_module, None);
+
+            device.destroy_shader_module(fragment_shader_module, None);
+        }
+
+        Ok(Self {
+            pipeline,
+            pipeline_layout,
+            device,
+        })
+    }
+
     /// pipelineを取得する。
     pub fn pipeline(&self) -> vk::Pipeline {
         self.pipeline
@@ -1320,6 +1638,54 @@ impl Drop for PipelineObject {
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
             self.device.destroy_pipeline(self.pipeline, None);
+        }
+    }
+}
+
+/// SamplerのRAIIラッパーオブジェクト。
+pub struct SamplerObject {
+    sampler: vk::Sampler,
+    device: Rc<Device>,
+}
+impl SamplerObject {
+    /// SamplerObjectを作成する。
+    pub fn new(device: Rc<Device>) -> Result<Self> {
+        let sampler = unsafe {
+            device.create_sampler(
+                &vk::SamplerCreateInfo::builder()
+                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                    .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                    .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                    .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                    .anisotropy_enable(true)
+                    .max_anisotropy(16.0)
+                    .mip_lod_bias(0.0)
+                    .min_lod(0.0)
+                    .max_lod(1.0)
+                    .compare_enable(false)
+                    .compare_op(vk::CompareOp::ALWAYS)
+                    .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE)
+                    .unnormalized_coordinates(false),
+                None,
+            )?
+        };
+        Ok(Self {
+            sampler,
+            device: Rc::clone(&device),
+        })
+    }
+
+    /// samplerを取得する。
+    pub fn sampler(&self) -> vk::Sampler {
+        self.sampler
+    }
+}
+impl Drop for SamplerObject {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_sampler(self.sampler, None);
         }
     }
 }
