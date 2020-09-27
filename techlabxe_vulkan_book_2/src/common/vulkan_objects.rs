@@ -1074,6 +1074,41 @@ impl RenderPassObject {
         })
     }
 
+    /// PostEffect用のDepthのないRenderPassの作成。
+    pub fn new_posteffect(device: Rc<Device>, format: vk::Format) -> Result<Self> {
+        // Attachments
+        let attachments = [vk::AttachmentDescription::builder()
+            .format(format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .build()];
+        // color reference
+        let color_reference = [vk::AttachmentReference::builder()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .build()];
+        // subpass descriptionを作成
+        let subpasses = [vk::SubpassDescription::builder()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(&color_reference)
+            .build()];
+        // render passの作成
+        let render_pass_create_info = vk::RenderPassCreateInfo::builder()
+            .attachments(&attachments)
+            .subpasses(&subpasses);
+        let render_pass = unsafe { device.create_render_pass(&render_pass_create_info, None)? };
+
+        Ok(Self {
+            render_pass,
+            device,
+        })
+    }
+
     /// final layoutがColorAttachmentOptimalなレンダーパスを返す。
     pub fn new_color_attachment_optimal(device: Rc<Device>, format: vk::Format) -> Result<Self> {
         // Attachments
@@ -1659,6 +1694,36 @@ impl SamplerObject {
                     .address_mode_u(vk::SamplerAddressMode::REPEAT)
                     .address_mode_v(vk::SamplerAddressMode::REPEAT)
                     .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                    .anisotropy_enable(true)
+                    .max_anisotropy(16.0)
+                    .mip_lod_bias(0.0)
+                    .min_lod(0.0)
+                    .max_lod(1.0)
+                    .compare_enable(false)
+                    .compare_op(vk::CompareOp::ALWAYS)
+                    .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE)
+                    .unnormalized_coordinates(false),
+                None,
+            )?
+        };
+        Ok(Self {
+            sampler,
+            device: Rc::clone(&device),
+        })
+    }
+
+    /// SamplerObjectを作成する。
+    /// CLAMP TO EDGE
+    pub fn new_clamp_to_edge(device: Rc<Device>) -> Result<Self> {
+        let sampler = unsafe {
+            device.create_sampler(
+                &vk::SamplerCreateInfo::builder()
+                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                     .anisotropy_enable(true)
                     .max_anisotropy(16.0)
                     .mip_lod_bias(0.0)
