@@ -1,5 +1,6 @@
 #![allow(unused_imports)]
 
+mod animation;
 mod common;
 mod instancing;
 mod posteffect;
@@ -7,6 +8,7 @@ mod resizable_window;
 mod texture_rendering;
 mod use_imgui;
 
+use animation::animation_app::AnimationAppBuilder;
 use common::{
     default_vulkan_app_base::DefaultVulkanAppBaseBuilder, vulkan_app_base::VulkanAppBaseBuilder,
     window_event_loop::WindowEventLoop,
@@ -23,6 +25,7 @@ fn main() {
     // let app_builder = UseImguiAppBuilder::new();
     // let app_builder = TextureRenderingAppBuilder::new();
     // let app_builder = InstancingAppBuilder::new();
-    let app_builder = PostEffectAppBuilder::new();
+    // let app_builder = PostEffectAppBuilder::new();
+    let app_builder = AnimationAppBuilder::new();
     WindowEventLoop::run(app_builder)
 }
