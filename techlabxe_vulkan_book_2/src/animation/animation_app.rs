@@ -12,7 +12,10 @@ use memoffset::offset_of;
 use winit::{dpi::PhysicalSize, event::Event, window::Window};
 
 use crate::{
-    animation::model::{Model, SceneParameter},
+    animation::{
+        animator::Animator,
+        model::{Model, SceneParameter},
+    },
     common::{
         cgmath_ext::Matrix4Ext,
         default_vulkan_app_base::{DefaultVulkanAppBase, DefaultVulkanAppBaseBuilder},
@@ -162,6 +165,8 @@ impl VulkanAppBaseBuilder for AnimationAppBuilder {
             1024,
         )?;
 
+        let animator = Animator::new("assets/Motion/ごまえミク.vmd")?;
+
         // imguiリソースの作成
         let (imgui_render_pass, imgui_framebuffers) =
             Self::prepare_imgui_resource(base.device(), base.swapchain(), width, height)?;
@@ -201,22 +206,18 @@ impl VulkanAppBaseBuilder for AnimationAppBuilder {
             Renderer::new(&vk_context, 3, imgui_render_pass.render_pass(), &mut imgui)?;
         let last_frame = Instant::now();
 
-        let morph_name = model
-            .face_offset_info
-            .iter()
-            .map(|f| f.name.to_string())
-            .collect::<Vec<_>>();
-        let morph_weights = morph_name.iter().map(|_| 0.0).collect::<Vec<_>>();
         let model_name = model.model_name.clone();
         let model_version = model.model_version;
         let model_comment = model.model_comment.clone();
 
+        let frame_period = animator.get_frame_period();
+
         Ok(Self::Item {
+            current_frame: 0,
+            frame_period,
             model_name,
             model_version,
             model_comment,
-            morph_weights,
-            morph_name,
 
             imgui,
             platform,
@@ -224,6 +225,8 @@ impl VulkanAppBaseBuilder for AnimationAppBuilder {
             last_frame,
             imgui_framebuffers,
             imgui_render_pass,
+
+            animator,
 
             shadow_framebuffer,
             model_framebuffers,
@@ -235,11 +238,11 @@ impl VulkanAppBaseBuilder for AnimationAppBuilder {
 }
 
 pub struct AnimationApp {
+    current_frame: u32,
+    frame_period: u32,
     model_name: String,
     model_version: f32,
     model_comment: String,
-    morph_weights: Vec<f32>,
-    morph_name: Vec<String>,
 
     imgui: Context,
     platform: WinitPlatform,
@@ -247,6 +250,8 @@ pub struct AnimationApp {
     last_frame: Instant,
     imgui_framebuffers: Vec<FramebufferObject>,
     imgui_render_pass: RenderPassObject,
+
+    animator: Animator,
 
     shadow_framebuffer: FramebufferObject,
     model_framebuffers: Vec<FramebufferObject>,
@@ -290,13 +295,13 @@ impl VulkanAppBase for AnimationApp {
         // Modelに紐付いたリソースをどうにかする。
         self.model.set_scene_parameter(SceneParameter {
             view: Matrix4::look_at(
-                Point3::new(0.0, 10.0, 25.0),
+                Point3::new(0.0, 10.0, 50.0),
                 Point3::new(0.0, 10.0, 0.0),
                 Vector3::new(0.0, 1.0, 0.0),
             ),
             proj: Matrix4::perspective(Deg(45.0), self.base.swapchain().aspect(), 0.01, 100.0),
             light_direction: Vector4::new(1.0, 1.0, 1.0, 0.0).normalize(),
-            eye_position: Vector4::new(0.0, 10.0, 25.0, 1.0),
+            eye_position: Vector4::new(0.0, 10.0, 50.0, 1.0),
             light_view_proj: Matrix4::ortho(-20.0, 20.0, -20.0, 20.0, 0.0, 500.0)
                 * Matrix4::look_at(
                     Point3::new(50.0, 50.0, 50.0),
@@ -369,14 +374,23 @@ impl VulkanAppBase for AnimationApp {
             .prepare_frame(self.imgui.io_mut(), window)
             .expect("Failed to prepare frame");
 
+        // UIの構築
+        let ui = self.imgui.frame();
+
+        if ui.is_key_down(ui.key_index(imgui::Key::RightArrow)) {
+            self.current_frame += 1;
+        }
+        if ui.is_key_down(ui.key_index(imgui::Key::LeftArrow)) && self.current_frame > 0 {
+            self.current_frame -= 1;
+        }
+        self.current_frame = self.current_frame.min(self.frame_period);
+
         let model_name = &self.model_name;
         let model_version = &self.model_version;
         let model_comment = &self.model_comment;
-        let morph_name = &self.morph_name;
-        let morph_weights = &mut self.morph_weights;
+        let frame_period = self.frame_period;
+        let current_frame = &mut self.current_frame;
 
-        // UIの構築
-        let ui = self.imgui.frame();
         imgui::Window::new(im_str!("Hello World"))
             .size([300.0, 110.0], Condition::FirstUseEver)
             .build(&ui, || {
@@ -390,15 +404,7 @@ impl VulkanAppBase for AnimationApp {
                     imgui::ImStr::from_utf8_with_nul_unchecked(model_comment.as_bytes())
                 });
                 ui.separator();
-                for i in 0..morph_name.len() {
-                    Slider::new(
-                        unsafe {
-                            imgui::ImStr::from_utf8_with_nul_unchecked(morph_name[i].as_bytes())
-                        },
-                        0.0..=1.0,
-                    )
-                    .build(&ui, &mut morph_weights[i]);
-                }
+                Slider::new(im_str!("frame"), 0..=frame_period).build(&ui, current_frame);
             });
         self.platform.prepare_render(&ui, &window);
         let draw_data = ui.render();
@@ -411,10 +417,9 @@ impl VulkanAppBase for AnimationApp {
 
         // Model描画
         {
-            for i in 0..self.model.get_face_morph_count() {
-                let i = i as usize;
-                self.model.set_morph_weight(i, self.morph_weights[i]);
-            }
+            self.animator
+                .update_animation(&mut self.model, self.current_frame);
+
             self.model.update(image_index)?;
 
             // クリア値

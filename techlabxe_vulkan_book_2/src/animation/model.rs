@@ -171,6 +171,9 @@ impl Bone {
     pub fn set_initial_translation(&mut self, trans: Vector3<f32>) {
         self.initial_translation = trans;
     }
+    pub fn get_initial_translation(&self) -> &Vector3<f32> {
+        &self.initial_translation
+    }
 
     pub fn set_inv_bind_matrix(&mut self, inv_bind: Matrix4<f32>) {
         self.inv_bind = inv_bind;
@@ -551,13 +554,13 @@ impl Model {
 
         let scene_param = SceneParameter {
             view: Matrix4::look_at(
-                Point3::new(0.0, 10.0, 25.0),
+                Point3::new(0.0, 10.0, 50.0),
                 Point3::new(0.0, 10.0, 0.0),
                 Vector3::new(0.0, 1.0, 0.0),
             ),
             proj: Matrix4::perspective(Deg(45.0), app.swapchain().aspect(), 0.01, 100.0),
             light_direction: Vector4::new(1.0, 1.0, 1.0, 0.0).normalize(),
-            eye_position: Vector4::new(0.0, 10.0, 25.0, 1.0),
+            eye_position: Vector4::new(0.0, 10.0, 50.0, 1.0),
             light_view_proj: Matrix4::ortho(-20.0, 20.0, -20.0, 20.0, 0.0, 500.0)
                 * Matrix4::look_at(
                     Point3::new(50.0, 50.0, 50.0),
