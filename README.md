@@ -9,3 +9,4 @@
 - [3DグラフィクスAPI Vulkanを出来るだけやさしく解説する本(PDF版) - FADIS PRESS - BOOTH](https://booth.pm/ja/items/1562222)
 - [Vulkan Programming Vol.1 - すらりんラボ - BOOTH](https://booth.pm/ja/items/1286100)
 - [Vulkan Programming Vol.2 - すらりんラボ - BOOTH](https://booth.pm/ja/items/1572740)
+- [Vulkan Programming Vol.3 - すらりんラボ - BOOTH](https://booth.pm/ja/items/1851411)

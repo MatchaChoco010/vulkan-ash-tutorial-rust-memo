@@ -4,4 +4,5 @@ members = [
   "fadis_vulkan_sample_2019",
   "techlabxe_vulkan_book_1",
   "techlabxe_vulkan_book_2",
+  "techlabxe_vulkan_book_3",
 ]
