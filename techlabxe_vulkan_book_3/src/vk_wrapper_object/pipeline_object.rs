@@ -3,7 +3,7 @@ use std::{ffi::CString, path::Path, rc::Rc};
 use anyhow::Result;
 use ash::{version::DeviceV1_0, vk, Device};
 
-use crate::vk_wrapper_object::{DescriptorSetLayoutObject, DeviceObject, RenderPassObject};
+use crate::vk_wrapper_object::{DescriptorSetLayoutObject, RenderPassObject};
 
 pub struct PipelineObject {
     pipeline: vk::Pipeline,
@@ -13,28 +13,36 @@ pub struct PipelineObject {
 impl PipelineObject {
     /// GraphicsPipelineObjectを生成する。
     pub fn new(
-        device: &DeviceObject,
+        device: Rc<Device>,
         vertex_shader_pass: impl AsRef<Path>,
         fragment_shader_pass: impl AsRef<Path>,
-        vertex_input_state_create_info: vk::PipelineVertexInputStateCreateInfo,
-        input_assembly_state_create_info: vk::PipelineInputAssemblyStateCreateInfo,
-        viewport_state_create_info: vk::PipelineViewportStateCreateInfo,
-        rasterization_state_create_info: vk::PipelineRasterizationStateCreateInfo,
-        multisample_state_create_info: vk::PipelineMultisampleStateCreateInfo,
-        color_blend_state_create_info: vk::PipelineColorBlendStateCreateInfo,
-        depth_stencil_state_create_info: vk::PipelineDepthStencilStateCreateInfo,
+        vertex_input_state_create_info: &vk::PipelineVertexInputStateCreateInfo,
+        input_assembly_state_create_info: &vk::PipelineInputAssemblyStateCreateInfo,
+        viewport_state_create_info: &vk::PipelineViewportStateCreateInfo,
+        rasterization_state_create_info: &vk::PipelineRasterizationStateCreateInfo,
+        multisample_state_create_info: &vk::PipelineMultisampleStateCreateInfo,
+        color_blend_state_create_info: &vk::PipelineColorBlendStateCreateInfo,
+        depth_stencil_state_create_info: &vk::PipelineDepthStencilStateCreateInfo,
+        push_constants_range: Option<vk::PushConstantRange>,
         render_pass: &RenderPassObject,
         descriptor_set_layout: &DescriptorSetLayoutObject,
     ) -> Result<Self> {
-        let device_ref = device.device_as_ref();
+        let device_ref = device.as_ref();
 
         // パイプラインレイアウト
         let pipeline_layout = unsafe {
-            device_ref.create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::builder()
-                    .set_layouts(&[descriptor_set_layout.descriptor_set_layout()]),
-                None,
-            )?
+            let layouts = [descriptor_set_layout.descriptor_set_layout()];
+            let mut pipeline_layout_create_info =
+                vk::PipelineLayoutCreateInfo::builder().set_layouts(&layouts);
+
+            if let Some(push_constant_range) = push_constants_range {
+                let push_constant_ranges = [push_constant_range];
+                pipeline_layout_create_info =
+                    pipeline_layout_create_info.push_constant_ranges(&push_constant_ranges);
+                device_ref.create_pipeline_layout(&pipeline_layout_create_info, None)?
+            } else {
+                device_ref.create_pipeline_layout(&pipeline_layout_create_info, None)?
+            }
         };
 
         // シェーダバイナリの読み込み
@@ -85,13 +93,13 @@ impl PipelineObject {
         // パイプラインの構築
         let pipeline_create_info = [vk::GraphicsPipelineCreateInfo::builder()
             .stages(&pipeline_shader_stage_create_info)
-            .vertex_input_state(&vertex_input_state_create_info)
-            .input_assembly_state(&input_assembly_state_create_info)
-            .viewport_state(&viewport_state_create_info)
-            .rasterization_state(&rasterization_state_create_info)
-            .multisample_state(&multisample_state_create_info)
-            .depth_stencil_state(&depth_stencil_state_create_info)
-            .color_blend_state(&color_blend_state_create_info)
+            .vertex_input_state(vertex_input_state_create_info)
+            .input_assembly_state(input_assembly_state_create_info)
+            .viewport_state(viewport_state_create_info)
+            .rasterization_state(rasterization_state_create_info)
+            .multisample_state(multisample_state_create_info)
+            .depth_stencil_state(depth_stencil_state_create_info)
+            .color_blend_state(color_blend_state_create_info)
             .layout(pipeline_layout)
             .render_pass(render_pass.render_pass())
             .build()];
@@ -111,7 +119,7 @@ impl PipelineObject {
         Ok(Self {
             pipeline,
             pipeline_layout,
-            device: device.device(),
+            device: device,
         })
     }
 

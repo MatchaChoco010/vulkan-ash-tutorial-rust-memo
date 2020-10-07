@@ -1,5 +1,9 @@
-use techlabxe_vulkan_book_3;
+use techlabxe_vulkan_book_3::{
+    app_base::{VulkanAppBaseBuilder, WindowEventLoop},
+    cubemap_app::app::AppBuilder,
+};
 
 fn main() {
-    println!("Hello, world!");
+    let app_builder = AppBuilder::new();
+    WindowEventLoop::run(app_builder);
 }

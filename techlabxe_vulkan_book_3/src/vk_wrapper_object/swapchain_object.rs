@@ -164,10 +164,8 @@ impl SwapchainObject {
     pub fn new(
         instance: &InstanceObject,
         device: &DeviceObject,
-        physical_device: PhysicalDeviceObject,
+        physical_device: &PhysicalDeviceObject,
         surface: &SurfaceObject,
-        graphics_queue_index: u32,
-        present_queue_index: u32,
         width: u32,
         height: u32,
     ) -> Result<Self> {
@@ -179,8 +177,8 @@ impl SwapchainObject {
             device.device(),
             surface.surface_loader(),
             surface.surface(),
-            graphics_queue_index,
-            present_queue_index,
+            physical_device.graphics_queue_index(),
+            physical_device.present_queue_index(),
             width,
             height,
             None,
@@ -215,15 +213,6 @@ impl SwapchainObject {
         std::mem::swap(&mut self.format, &mut tmp_swapchain_object.format);
         std::mem::swap(&mut self.extent, &mut tmp_swapchain_object.extent);
 
-        // 以前のスワップチェーンの破棄
-        unsafe {
-            for &image_view in tmp_swapchain_object.image_views.iter() {
-                self.device.destroy_image_view(image_view, None);
-            }
-            self.swapchain_loader
-                .destroy_swapchain(tmp_swapchain_object.swapchain, None);
-        }
-
         Ok(())
     }
 
@@ -233,9 +222,9 @@ impl SwapchainObject {
     }
 
     /// acquire_next_imageを呼び出す。
-    pub fn acquire_next_image(&self, semaphore: vk::Semaphore) -> Result<usize> {
+    pub fn acquire_next_image(&self, semaphore: vk::Semaphore) -> Result<(usize, bool)> {
         unsafe {
-            let (image_index, _is_suboptimal) = self.swapchain_loader.acquire_next_image(
+            let (image_index, is_suboptimal) = self.swapchain_loader.acquire_next_image(
                 self.swapchain,
                 std::u64::MAX,
                 semaphore,
@@ -243,7 +232,7 @@ impl SwapchainObject {
             )?;
 
             let image_index = image_index as usize;
-            Ok(image_index)
+            Ok((image_index, is_suboptimal))
         }
     }
 
@@ -253,8 +242,8 @@ impl SwapchainObject {
     }
 
     /// ImageViewを取得する。
-    pub fn get_image_view(&self, index: usize) -> &vk::ImageView {
-        &self.image_views[index]
+    pub fn get_image_view(&self, index: usize) -> vk::ImageView {
+        self.image_views[index]
     }
 
     /// queue_presentを呼び出す。

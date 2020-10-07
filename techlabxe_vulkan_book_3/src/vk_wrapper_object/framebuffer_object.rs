@@ -3,7 +3,7 @@ use std::rc::Rc;
 use anyhow::Result;
 use ash::{version::DeviceV1_0, vk, Device};
 
-use crate::vk_wrapper_object::{DeviceObject, RenderPassObject};
+use crate::vk_wrapper_object::RenderPassObject;
 
 pub struct FramebufferObject {
     framebuffer: vk::Framebuffer,
@@ -12,14 +12,12 @@ pub struct FramebufferObject {
 impl FramebufferObject {
     /// framebufferを作成する。
     pub fn new(
-        device: &DeviceObject,
+        device: Rc<Device>,
         render_pass: &RenderPassObject,
         attachments: &[vk::ImageView],
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let device = device.device();
-
         let framebuffer = unsafe {
             device.create_framebuffer(
                 &vk::FramebufferCreateInfo::builder()

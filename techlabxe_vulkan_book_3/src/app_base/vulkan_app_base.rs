@@ -27,7 +27,7 @@ pub trait VulkanAppBase: Drop {
     /// マウスアップ。
     fn on_mouse_button_up(&mut self, _button: i32) {}
     /// マウスムーブ。
-    fn on_mouse_move(&mut self, _dx: i32, _dy: i32) {}
+    fn on_mouse_move(&mut self, _x: f64, _y: f64) {}
     /// イベント開始
     fn on_new_events(&mut self) {}
     /// メインイベントクリア

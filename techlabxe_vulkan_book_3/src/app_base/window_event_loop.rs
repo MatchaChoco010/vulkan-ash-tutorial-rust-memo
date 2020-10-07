@@ -127,6 +127,14 @@ impl WindowEventLoop {
                         }
                     }
                 }
+                Event::WindowEvent {
+                    event: WindowEvent::CursorMoved { position, .. },
+                    ..
+                } => {
+                    let x = position.x;
+                    let y = position.y;
+                    app.on_mouse_move(x, y);
+                }
                 Event::MainEventsCleared => {
                     app.on_main_events_cleared(&window);
                     window.request_redraw();

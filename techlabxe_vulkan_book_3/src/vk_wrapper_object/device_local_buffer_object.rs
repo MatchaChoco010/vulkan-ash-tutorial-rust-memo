@@ -16,7 +16,7 @@ impl DeviceLocalBufferObject {
         device: &DeviceObject,
         allocator: &VkMemAllocatorObject,
         graphics_command_pool: &CommandPoolObject,
-        graphics_queue: &vk::Queue,
+        graphics_queue: vk::Queue,
         data: &[T],
         usage: vk::BufferUsageFlags,
     ) -> Result<Self> {
@@ -75,13 +75,13 @@ impl DeviceLocalBufferObject {
 
             // キューにサブミットし待機
             device.queue_submit(
-                *graphics_queue,
+                graphics_queue,
                 &[vk::SubmitInfo::builder()
                     .command_buffers(&[copy_cmd])
                     .build()],
                 vk::Fence::null(),
             )?;
-            device.queue_wait_idle(*graphics_queue)?;
+            device.queue_wait_idle(graphics_queue)?;
         }
 
         // 一時バッファの削除

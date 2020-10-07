@@ -1600,6 +1600,7 @@ dependencies = [
  "cgmath 0.17.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "image 0.23.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "memoffset 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tobj 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "vk-mem 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "winit 0.23.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

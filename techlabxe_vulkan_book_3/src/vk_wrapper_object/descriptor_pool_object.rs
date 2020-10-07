@@ -3,8 +3,6 @@ use std::rc::Rc;
 use anyhow::Result;
 use ash::{version::DeviceV1_0, vk, Device};
 
-use crate::vk_wrapper_object::DeviceObject;
-
 pub struct DescriptorPoolObject {
     descriptor_pool: vk::DescriptorPool,
     device: Rc<Device>,
@@ -12,12 +10,10 @@ pub struct DescriptorPoolObject {
 impl DescriptorPoolObject {
     /// DescriptorPoolObjectを生成する。
     pub fn new(
-        device: &DeviceObject,
+        device: Rc<Device>,
         pool_sizes: &[vk::DescriptorPoolSize],
         max_sets: u32,
     ) -> Result<Self> {
-        let device = device.device();
-
         let pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::builder()

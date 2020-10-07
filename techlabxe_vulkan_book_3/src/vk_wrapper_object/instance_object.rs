@@ -4,14 +4,14 @@ use anyhow::Result;
 use ash::{
     extensions::ext::DebugUtils,
     version::{EntryV1_0, InstanceV1_0},
-    vk, Entry, Instance,
+    vk, Instance,
 };
 use ash_window::enumerate_required_extensions;
 use winit::window::Window;
 
 use crate::vk_wrapper_object::{
     constants::{ENABLE_VALIDATION_LAYERS, VALIDATION},
-    DebugUtilsObject,
+    DebugUtilsObject, EntryObject,
 };
 
 pub struct InstanceObject {
@@ -25,11 +25,13 @@ impl InstanceObject {
     /// releaseモードの場合はプレーンなインスタンスを返す。
     /// どちらの場合もSurfaceを作成するのに必要なextensionを要求する。
     pub fn new(
-        entry: Rc<Entry>,
+        entry: &EntryObject,
         window: &Window,
         app_name: impl Into<String>,
         version: (u32, u32, u32),
     ) -> Result<Self> {
+        let entry = entry.entry_as_ref();
+
         // applicationi info
         let app_name = CString::new(app_name.into()).unwrap();
         let engine_name = CString::new("Vulkan Engine").unwrap();

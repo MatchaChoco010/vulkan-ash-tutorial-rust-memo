@@ -3,17 +3,13 @@ use std::rc::Rc;
 use anyhow::Result;
 use ash::{version::DeviceV1_0, vk, Device};
 
-use crate::vk_wrapper_object::DeviceObject;
-
 pub struct DescriptorSetLayoutObject {
     descriptor_set_layout: vk::DescriptorSetLayout,
     device: Rc<Device>,
 }
 impl DescriptorSetLayoutObject {
     /// DescriptorSetLayoutObjectを生成する。
-    pub fn new(device: &DeviceObject, bindings: &[vk::DescriptorSetLayoutBinding]) -> Result<Self> {
-        let device = device.device();
-
+    pub fn new(device: Rc<Device>, bindings: &[vk::DescriptorSetLayoutBinding]) -> Result<Self> {
         let layout = unsafe {
             device.create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings),

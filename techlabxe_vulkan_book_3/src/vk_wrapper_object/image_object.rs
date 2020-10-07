@@ -84,7 +84,7 @@ impl ImageObject {
     }
 
     /// DepthBuffer用Imageを作成する。
-    pub fn new_depth(
+    pub fn new_depth_stencil(
         device: &DeviceObject,
         allocator: &VkMemAllocatorObject,
         width: u32,
@@ -97,7 +97,7 @@ impl ImageObject {
         let (image, image_allocation, _info) = allocator_ref.create_image(
             &vk::ImageCreateInfo::builder()
                 .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::D32_SFLOAT)
+                .format(vk::Format::D32_SFLOAT_S8_UINT)
                 .extent(vk::Extent3D {
                     width: width,
                     height: height,
@@ -119,7 +119,7 @@ impl ImageObject {
                 &vk::ImageViewCreateInfo::builder()
                     .view_type(vk::ImageViewType::TYPE_2D)
                     .image(image)
-                    .format(vk::Format::D32_SFLOAT)
+                    .format(vk::Format::D32_SFLOAT_S8_UINT)
                     .components(vk::ComponentMapping {
                         r: vk::ComponentSwizzle::IDENTITY,
                         g: vk::ComponentSwizzle::IDENTITY,
@@ -396,15 +396,20 @@ impl ImageObject {
         let allocator_ref = allocator.allocator_as_ref();
 
         // ステージングバッファの作成
-        let (staging_buffer, staging_buffer_allocation, _info) = allocator_ref.create_buffer(
-            &vk::BufferCreateInfo::builder()
-                .size(image_size)
-                .usage(vk::BufferUsageFlags::TRANSFER_SRC),
-            &vk_mem::AllocationCreateInfo {
-                usage: vk_mem::MemoryUsage::CpuOnly,
-                ..Default::default()
-            },
-        )?;
+        let mut staging_buffers = vec![];
+        for _ in 0..6 {
+            staging_buffers.push(
+                allocator_ref.create_buffer(
+                    &vk::BufferCreateInfo::builder()
+                        .size(image_size)
+                        .usage(vk::BufferUsageFlags::TRANSFER_SRC),
+                    &vk_mem::AllocationCreateInfo {
+                        usage: vk_mem::MemoryUsage::CpuOnly,
+                        ..Default::default()
+                    },
+                )?,
+            );
+        }
 
         let format = vk::Format::R8G8B8A8_UNORM;
 
@@ -476,6 +481,8 @@ impl ImageObject {
             );
 
             for i in 0..6 {
+                let (staging_buffer, staging_buffer_allocation, _) = staging_buffers[i];
+
                 // ステージングバッファへのマップ
                 let mapped_memory =
                     allocator_ref.map_memory(&staging_buffer_allocation)? as *mut u8;
@@ -575,7 +582,9 @@ impl ImageObject {
             )?
         };
 
-        allocator_ref.destroy_buffer(staging_buffer, &staging_buffer_allocation)?;
+        for (staging_buffer, staging_buffer_allocation, _) in staging_buffers {
+            allocator_ref.destroy_buffer(staging_buffer, &staging_buffer_allocation)?;
+        }
 
         Ok(Self {
             image,
