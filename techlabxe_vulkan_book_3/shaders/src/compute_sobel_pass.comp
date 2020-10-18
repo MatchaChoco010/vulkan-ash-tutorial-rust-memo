@@ -1,0 +1,32 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+/* image2D で読み込むためには フォーマット指定を行う */
+layout(set = 0, binding = 0, rgba8) uniform readonly image2D srcImage;
+
+layout(set = 0, binding = 1, rgba8) uniform image2D destImage;
+
+void main() {
+  ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+  if (pos.x < 800 && pos.y < 600) {
+    int k = 0;
+    vec3 pixels[9];
+    for (int y = -1; y <= 1; ++y) {
+      for (int x = -1; x <= 1; ++x, k++) {
+        ivec2 xy = ivec2(pos + ivec2(x, y));
+        pixels[k] = imageLoad(srcImage, xy).xyz;
+      }
+    }
+
+    // フィルタ計算.
+    vec3 sobelH, sobelV;
+    sobelH = pixels[0] * -1 + pixels[2] * 1 + pixels[3] * -2 + pixels[5] * 2 +
+             pixels[6] * -1 + pixels[8] * 1;
+    sobelV = pixels[0] * -1 + pixels[1] * -2 + pixels[2] * -1 + pixels[6] * 1 +
+             pixels[7] * 2 + pixels[8] * 1;
+
+    // 表示用に結合.
+    vec4 color = vec4(sqrt(sobelV * sobelV + sobelH * sobelH), 1);
+    imageStore(destImage, pos, color);
+  }
+}

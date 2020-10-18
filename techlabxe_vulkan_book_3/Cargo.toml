@@ -10,8 +10,10 @@ edition = "2018"
 anyhow = "1.0.32"
 ash = "0.31.0"
 ash-window = "0.5.0"
+crevice = "0.4.0"
 image = "0.23.10"
 memoffset = "0.5.6"
+mint = "0.5.5"
 tobj = "2.0.2"
 vk-mem = "0.2.2"
 winit = "0.23.0"
@@ -19,3 +21,7 @@ winit = "0.23.0"
 [dependencies.cgmath]
 version = "0.17.0"
 features = ["swizzle"]
+
+[dependencies.gltf]
+version = "0.15.2"
+features=["utils"]

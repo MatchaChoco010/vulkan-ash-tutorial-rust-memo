@@ -53,6 +53,11 @@ impl HostVisibleBufferObject {
         self.buffer
     }
 
+    /// buffer_sizeを取得する。
+    pub fn buffer_size(&self) -> u64 {
+        self.buffer_size
+    }
+
     /// データを転送する。
     /// newで作成したデータサイズと異なるサイズのデータを渡すとパニックする。
     pub fn map_data<T>(&self, data: &[T]) -> Result<()> {

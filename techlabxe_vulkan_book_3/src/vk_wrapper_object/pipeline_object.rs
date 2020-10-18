@@ -123,6 +123,66 @@ impl PipelineObject {
         })
     }
 
+    pub fn new_compute(
+        device: Rc<Device>,
+        shader_pass: impl AsRef<Path>,
+        descriptor_set_layout: &DescriptorSetLayoutObject,
+    ) -> Result<Self> {
+        // パイプラインレイアウト
+        let pipeline_layout = unsafe {
+            let layouts = [descriptor_set_layout.descriptor_set_layout()];
+            let pipeline_layout_create_info =
+                vk::PipelineLayoutCreateInfo::builder().set_layouts(&layouts);
+            device.create_pipeline_layout(&pipeline_layout_create_info, None)?
+        };
+
+        // シェーダバイナリの読み込み
+        let shader_module = {
+            use std::fs::File;
+            use std::io::Read;
+
+            let spv_file = File::open(shader_pass)?;
+            let bytes_code: Vec<u8> = spv_file.bytes().filter_map(|byte| byte.ok()).collect();
+
+            let shader_module_create_info = vk::ShaderModuleCreateInfo {
+                code_size: bytes_code.len(),
+                p_code: bytes_code.as_ptr() as *const u32,
+                ..Default::default()
+            };
+            unsafe { device.create_shader_module(&shader_module_create_info, None)? }
+        };
+        let main_function_name = CString::new("main").unwrap();
+        let pipeline_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::builder()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(shader_module)
+            .name(&main_function_name)
+            .build();
+
+        let pipeline = unsafe {
+            device
+                .create_compute_pipelines(
+                    vk::PipelineCache::null(),
+                    &[vk::ComputePipelineCreateInfo::builder()
+                        .stage(pipeline_shader_stage_create_info)
+                        .layout(pipeline_layout)
+                        .build()],
+                    None,
+                )
+                .unwrap()[0]
+        };
+
+        // ShaderModuleはもう不要のため破棄
+        unsafe {
+            device.destroy_shader_module(shader_module, None);
+        }
+
+        Ok(Self {
+            pipeline,
+            pipeline_layout,
+            device: device,
+        })
+    }
+
     /// pipelineを取得する。
     pub fn pipeline(&self) -> vk::Pipeline {
         self.pipeline

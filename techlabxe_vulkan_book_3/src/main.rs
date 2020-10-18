@@ -1,6 +1,7 @@
 use techlabxe_vulkan_book_3::{
     app_base::{VulkanAppBaseBuilder, WindowEventLoop},
-    cubemap_app::app::AppBuilder,
+    cs_post_effect::app::AppBuilder,
+    // cubemap_app::app::AppBuilder,
 };
 
 fn main() {
